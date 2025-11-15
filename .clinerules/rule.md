@@ -1,0 +1,8 @@
+- 每次執行前確認plan.md、.gitignore 與 progess.md,沒有時請創建並規劃
+- 將plan.md跟progess.md放到project資料夾並不要被更新到git上
+- 每次執行完成更新plan.md 與 progess.md
+- requirements.txt 中不得出現未使用的套件。
+- 跑程式跟測試在uv環境下操作
+- 要使用pydantic控制程式結構
+- 資料庫架構請參考database_schema.md
+- 所有參數設定都在.env處理
