@@ -9,34 +9,29 @@ requires-python = ">=3.10"
 dependencies = [
     # === Core AI Frameworks ===
     "langchain>=1.0.0,<2.0.0",
-    "langgraph>=0.2.0,<0.3.0",
+    "langgraph>=1.0.0,<2.0.0",
     "llama-index>=0.14.0,<0.15.0",
-
     # === Multimodal / Vision ===
-    "qwen2vl-client>=0.1.0",
+    # "qwen2vl-client>=0.1.0",  # TODO: Replace with actual VLM package when available
     "transformers>=4.40.0",
     "sentence-transformers>=2.3.0",
     "pdfplumber>=0.10.0",
     "pytesseract>=0.3.10",
-
     # === Databases ===
     "neo4j>=5.20.0",
-    "supabase>=1.0.0,<2.0.0",
-
+    "supabase>=1.0.0",
     # === API / Backend ===
     "fastapi>=0.110.0",
     "uvicorn>=0.23.0",
-
     # === Frontend ===
     "streamlit>=1.30.0",
-
     # === Data Processing ===
     "pydantic>=2.0.0,<3.0.0",
     "python-multipart>=0.0.6",
-
     # === Optional ===
     "openai>=1.0.0",
     "py2neo>=2021.2.3",
+    "mineru>=2.6.4",
 ]
 
 [build-system]
@@ -54,8 +49,8 @@ target-version = "py310"
 select = ["E", "F", "W", "C90"]
 ignore = ["E501"]  # Line too long, we're okay with that here
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "black>=23.0.0",
     "isort>=5.0.0",
