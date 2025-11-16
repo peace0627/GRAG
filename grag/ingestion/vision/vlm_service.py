@@ -200,17 +200,8 @@ class VLMService:
             except Exception as e:
                 logger.warning(f"Failed to create OpenAI VLM client: {e}")
 
-        # Priority 4: Qwen2VL (using OpenAI-compatible interface)
-        if settings.qwen2vl_base_url:
-            logger.info("Loading Qwen2VL OpenAI-compatible client")
-            try:
-                return VLMClient(
-                    api_type="openai",
-                    base_url=settings.qwen2vl_base_url,
-                    api_key=settings.qwen2vl_api_key or ""
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create Qwen2VL client: {e}")
+        # Note: Qwen2VL cloud service removed - using local Ollama only
+        # for better privacy, cost control, and performance
 
         # No valid VLM configuration found
         raise Exception("No valid VLM configuration found. Available options:\n"

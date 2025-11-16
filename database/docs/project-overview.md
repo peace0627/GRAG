@@ -269,7 +269,7 @@ neo4j>=5.20.0                     # Neo4j official Python driver
 supabase>=1.0.0,<2.0.0
 
 # === Multimodal / Vision Layer ===
-qwen2vl-client>=0.1.0
+# Qwen2VL has been removed - using Ollama for local VLM instead
 pdfplumber>=0.10.0
 pytesseract>=0.3.10
 transformers>=4.40.0
@@ -316,4 +316,3 @@ py2neo>=2021.2.3                  # optional for direct Neo4j ops
 ---
 
 *文件版本：2025-11-11*
-

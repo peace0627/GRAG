@@ -12,7 +12,7 @@ dependencies = [
     "langgraph>=1.0.0,<2.0.0",
     "llama-index>=0.14.0,<0.15.0",
     # === Multimodal / Vision ===
-    # "qwen2vl-client>=0.1.0",  # TODO: Replace with actual VLM package when available
+    # Qwen2VL has been removed - using Ollama for local VLM instead
     "transformers>=4.40.0",
     "sentence-transformers>=2.3.0",
     "pdfplumber>=0.10.0",

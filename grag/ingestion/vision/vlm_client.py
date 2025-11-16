@@ -13,6 +13,7 @@ from uuid import uuid4
 import requests
 
 from grag.core.config import settings
+from grag.core.constants import DEFAULT_TIMEOUT, MAX_TOKENS, DEFAULT_TEMPERATURE
 from .vlm_schemas import VLMOutput, VLMRegion, TableData, ChartData
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,11 @@ class VLMClient:
         if api_type == "openai":
             self.base_url = base_url or settings.qwen2vl_base_url or "https://api.openai.com/v1"
             self.api_key = api_key or settings.openai_api_key
-            self.model = "gpt-4o"  # GPT-4V capable model
+            self.model = "gpt-4o"  # GPT-4V capable model for OpenAI
         elif api_type == "ollama":
             self.base_url = base_url or "http://localhost:11434/v1"
             self.api_key = api_key or "ollama"
-            self.model = settings.ollama_model  # Use configured Ollama model
+            self.model = settings.ollama_model  # Updated: uses qwen3-vl:235b-cloud
         else:
             raise ValueError(f"Unsupported API type: {api_type}")
 
@@ -158,8 +159,8 @@ class VLMClient:
                     ]
                 }
             ],
-            "max_tokens": 4096,
-            "temperature": 0.1  # More deterministic for document analysis
+            "max_tokens": MAX_TOKENS,
+            "temperature": DEFAULT_TEMPERATURE  # More deterministic for document analysis
         }
 
         try:
@@ -167,7 +168,7 @@ class VLMClient:
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=120  # 2 minutes timeout for vision processing
+                timeout=DEFAULT_TIMEOUT  # Use centralized timeout constant
             )
 
             if response.status_code != 200:

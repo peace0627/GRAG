@@ -23,14 +23,13 @@ class Settings(BaseSettings):
     # OpenAI (for completions)
     openai_api_key: str = ""
 
-    # Qwen2VL (for multimodal analysis)
-    qwen2vl_base_url: str = "https://api.qwen2vl.com"
-    qwen2vl_api_key: str = ""
-
-    # Ollama (local VLM service)
+    # Ollama (local VLM service - RECOMMENDED for qwen3-vl and other vision models)
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_api_key: str = "ollama"
-    ollama_model: str = "llava"
+    ollama_model: str = "qwen3-vl:235b-cloud"  # Uses qwen3-vl model via Ollama
+
+    # Note: Qwen2VL cloud service has been removed - using local Ollama instead
+    # for better privacy, cost control, and performance
 
     # === Application Configuration ===
     debug: bool = True

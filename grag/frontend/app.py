@@ -89,17 +89,8 @@ def check_processing_capability(capability_name: str, check_logic, settings_obj)
                 except:
                     available_services.append("OpenAI GPT-4V (API不可用)")
 
-            # 檢查Qwen2VL (最低優先級)
-            if not available_services and getattr(settings_obj, 'qwen2vl_base_url', None):
-                try:
-                    import requests
-                    # 針對Qwen2VL，嘗試簡單的GET請求來檢查服務
-                    response = requests.get(getattr(settings_obj, 'qwen2vl_base_url', ''), timeout=5)
-                    if response.status_code == 200:
-                        vlm_status = "Qwen2VL服務可用"
-                        available_services.append("Qwen2VL")
-                except:
-                    vlm_status = "無VLM服務"
+            # Qwen2VL cloud service removed - using local Ollama only
+            # for better privacy, cost control, and performance
 
             # 總是可用的降級處理器
             fallback_services = ["MinerU", "Tesseract OCR"]
