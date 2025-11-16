@@ -10,7 +10,7 @@ from .mineru_processor import MinerUProcessor
 from .vlm_client import VLMClient
 from .vlm_schemas import VLMOutput, VLMRegion
 
-from ..config import settings
+from grag.core.config import settings
 
 logger = logging.getLogger(__name__)
 

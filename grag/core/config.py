@@ -38,9 +38,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     include_visual_chunks: bool = True
 
-    # Embedding model parameters
-    embedding_model: str = "all-MiniLM-L6-v2"
-    embedding_dimension: int = 384
+    # Embedding service configuration
+    embedding_provider: str = "sentence_transformers"  # sentence_transformers, openai, cohere, huggingface
+    embedding_api_key: str = ""                        # API key for cloud providers
+    embedding_base_url: str = ""                       # Custom API endpoint
+    embedding_model: str = "all-MiniLM-L6-v2"           # Model identifier
+    embedding_dimension: int = 384                      # Expected embedding dimension
 
     # Knowledge extraction parameters
     extract_entities: bool = True

@@ -12,8 +12,8 @@ from .chunking_service import ChunkingService
 from .embedding_service import EmbeddingService
 from .knowledge_extraction import KnowledgeExtractor
 from ..vision.vlm_service import VLMService
-from ..config import settings
-from ..database_services import DatabaseManager
+from grag.core.config import settings
+from grag.core.database_services import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

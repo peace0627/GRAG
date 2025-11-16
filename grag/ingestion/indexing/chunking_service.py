@@ -11,7 +11,7 @@ from llama_index.core.node_parser import (
 )
 from llama_index.core import Document
 
-from ..config import settings
+from grag.core.config import settings
 
 logger = logging.getLogger(__name__)
 

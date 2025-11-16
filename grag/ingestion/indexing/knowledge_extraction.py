@@ -2,11 +2,11 @@
 
 import logging
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from uuid import UUID
 from datetime import datetime
 
-from ..config import settings
+from grag.core.config import settings
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import requests
 
-from ..config import settings
+from grag.core.config import settings
 from .vlm_schemas import VLMOutput, VLMRegion, TableData, ChartData
 
 logger = logging.getLogger(__name__)
