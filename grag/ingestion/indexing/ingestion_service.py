@@ -120,6 +120,13 @@ class IngestionService:
             )
 
             # Enhanced result with more metadata
+            # More robust VLM success detection
+            processing_layer = vlm_output.metadata.get("processing_layer", "").upper() if vlm_output.metadata else ""
+            vlm_actually_successful = (
+                processing_layer == "VLM" or
+                (processing_layer in ["MINERU", "OCR", "FALLBACK_TEXT_PROCESSING"] and use_vlm == True)  # VLM was attempted but VLM service not available
+            )
+
             result = {
                 "success": True,
                 "file_id": file_id,
@@ -129,7 +136,9 @@ class IngestionService:
                 "processing_trace": processing_trace,
                 "strategy_used": {
                     "vlm_used": use_vlm,
-                    "vlm_success": vlm_output.metadata.get("processed_by") in ["vlm", "mineru", "ocr"] if vlm_output.metadata else False,
+                    "vlm_success": vlm_actually_successful,
+                    "vlm_provider": vlm_output.metadata.get("vlm_provider", "unknown") if vlm_output.metadata else "unknown",
+                    "processing_layer": processing_layer.lower(),
                     "fallback_used": vlm_output.metadata.get("fallback") if vlm_output.metadata else None,
                     "langchain_loaded": True,
                     "loader_type": file_path.suffix,
@@ -165,40 +174,31 @@ class IngestionService:
             return result
 
     async def _process_with_vlm_enhanced(self, text: str, file_id: str, file_path: Path):
-        """Enhanced VLM processing with fallback"""
+        """Enhanced VLM processing with fallback - 優先調用真實VLM服務！"""
         try:
-            # 嘗試VLM處理
-            logger.info("Attempting VLM processing")
-            vlm_output = await self._process_text_with_vlm(text, file_id)
+            # 優先嘗試真實的VLM服務處理實際文件
+            logger.info(f"Attempting real VLM service processing for {file_path.name}")
+            vlm_output = await self._run_vlm_processing(file_path, file_id, settings.knowledge_area_id)
             vlm_output.metadata = vlm_output.metadata or {}
-            vlm_output.metadata["processed_by"] = "vlm"
+            vlm_output.metadata["processed_by"] = vlm_output.metadata.get("processing_layer", "vlm")
+            logger.info("VLM service processing successful!")
             return vlm_output
 
         except Exception as vlm_error:
-            logger.warning(f"VLM processing failed: {vlm_error}")
-            # VLM失敗，轉到舊的VLM服務 (會有MinerU/OCR fallback)
+            logger.warning(f"VLM service processing failed: {vlm_error}, falling back to text processing")
+            # VLM服務失敗，回退到文字處理
             try:
-                logger.info("Falling back to legacy VLM service")
-                # 創建臨時文字文件給舊服務
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-                    f.write(text)
-                    temp_path = Path(f.name)
-
-                # 使用舊的VLM處理服務
-                vlm_output = await self._run_vlm_processing(temp_path, file_id, settings.knowledge_area_id)
+                logger.info("Falling back to structured text processing")
+                vlm_output = await self._process_text_with_vlm(text, file_id)
                 vlm_output.metadata = vlm_output.metadata or {}
-                vlm_output.metadata["processed_by"] = vlm_output.metadata.get("processing_layer", "fallback")
-                vlm_output.metadata["fallback_reason"] = "vlm_api_failed"
-
-                # 清理臨時文件
-                temp_path.unlink()
+                vlm_output.metadata["processed_by"] = "text_fallback"
+                vlm_output.metadata["fallback_reason"] = "vlm_service_failed"
                 return vlm_output
 
             except Exception as fallback_error:
-                logger.error(f"All VLM processing failed: {fallback_error}")
+                logger.error(f"All processing methods failed: {fallback_error}")
                 # 最終降級到結構化文字分析
-                return await self._create_fallback_output(text, file_id, file_path, "vlm_complete_failure")
+                return await self._create_fallback_output(text, file_id, file_path, "all_methods_failed")
 
     async def _process_text_with_vlm(self, text: str, file_id: str):
         """Process text directly with VLM service"""

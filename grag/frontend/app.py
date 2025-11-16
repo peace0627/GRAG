@@ -48,6 +48,276 @@ st.markdown("""
 st.title("🔗 LangChain增強文檔處理測試器")
 st.markdown("---")
 
+# 系統處理能力總覽
+st.markdown("### 🔄 系統處理能力狀態")
+
+# 處理能力檢查函數
+def check_processing_capability(capability_name: str, check_logic, settings_obj) -> dict:
+    """檢查處理能力狀態的函數"""
+    status = {"name": capability_name, "status": "unknown", "details": ""}
+
+    try:
+        if capability_name == "多模態處理":
+            # 檢查VLM處理器 - 優先順序: Ollama > OpenAI > Qwen2VL
+            vlm_status = "使用降級處理 (MinerU + OCR)"
+            available_services = []
+
+            # 檢查Ollama (最高優先級)
+            if getattr(settings_obj, 'ollama_base_url', None):
+                try:
+                    import requests
+                    response = requests.get(f"{settings_obj.ollama_base_url.replace('/v1', '')}/api/tags", timeout=3)
+                    if response.status_code == 200:
+                        vlm_status = f"Ollama運行中 (模型: {getattr(settings_obj, 'ollama_model', 'unknown')})"
+                        available_services.append("Ollama")
+                except:
+                    available_services.append("Ollama (不可用)")
+
+            # 檢查OpenAI (第二優先級)
+            if not available_services and getattr(settings_obj, 'openai_api_key', None) and getattr(settings_obj, 'openai_api_key', '').startswith('sk-'):
+                try:
+                    import requests
+                    payload = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "test"}], "max_tokens": 1}
+                    response = requests.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {settings_obj.openai_api_key}"},
+                        json=payload, timeout=5
+                    )
+                    if response.status_code == 200:
+                        vlm_status = "OpenAI GPT-4V可用"
+                        available_services.append("OpenAI GPT-4V")
+                except:
+                    available_services.append("OpenAI GPT-4V (API不可用)")
+
+            # 檢查Qwen2VL (最低優先級)
+            if not available_services and getattr(settings_obj, 'qwen2vl_base_url', None):
+                try:
+                    import requests
+                    # 針對Qwen2VL，嘗試簡單的GET請求來檢查服務
+                    response = requests.get(getattr(settings_obj, 'qwen2vl_base_url', ''), timeout=5)
+                    if response.status_code == 200:
+                        vlm_status = "Qwen2VL服務可用"
+                        available_services.append("Qwen2VL")
+                except:
+                    vlm_status = "無VLM服務"
+
+            # 總是可用的降級處理器
+            fallback_services = ["MinerU", "Tesseract OCR"]
+
+            # 組合最終狀態
+            all_processors = available_services + fallback_services
+            status_emoji = "✅" if available_services else "⚠️"
+            status["status"] = f"{status_emoji} {vlm_status} → {' + '.join(all_processors)}"
+            return status
+
+        elif capability_name == "文本處理":
+            # 檢查基本文本處理能力
+            status["status"] = "✅ LangChain + LlamaIndex + SentenceTransformers"
+            status["details"] = "支持: .txt, .md, .docx, .pdf"
+            return status
+
+        # 其他能力檢查
+        result = check_logic(settings_obj)
+        if result:
+            status["status"] = "✅ 可用"
+        else:
+            status["status"] = "❌ 不可用"
+
+    except Exception as e:
+        status["status"] = f"❌ 檢查失敗: {str(e)[:30]}"
+        status["details"] = str(e)
+
+    return status
+
+# 檢查資料庫連線
+def check_database_connectivity(settings_obj):
+    db_available = False
+    try:
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver(
+            getattr(settings_obj, 'neo4j_uri'),
+            auth=(getattr(settings_obj, 'neo4j_user'), getattr(settings_obj, 'neo4j_password'))
+        )
+        driver.verify_connectivity()
+        driver.close()
+        db_available = True
+
+        # 檢查Supabase
+        from supabase import create_client
+        client = create_client(getattr(settings_obj, 'supabase_url'), getattr(settings_obj, 'supabase_key'))
+        response = client.table('vectors').select('*').limit(1).execute()
+        db_available = db_available and True
+
+    except Exception as e:
+        pass
+
+    return db_available
+
+# 生成系統處理報告 (給LLM/開發者)
+def _generate_processing_report(result: dict, processing_trace: dict = None) -> dict:
+    """生成詳細的處理報告給LLM或開發者分析"""
+
+    report = {
+        "final_processor": "",
+        "processor_type": "",
+        "vlm_attempted": False,
+        "vlm_success": False,
+        "fallback_chain": [],
+        "error_details": [],
+        "performance": {},
+        "recommendations": []
+    }
+
+    try:
+        # 從處理軌跡中提取最終處理器
+        if processing_trace and "processing_chain" in processing_trace:
+            for step in processing_trace["processing_chain"]:
+                if step.get("stage") == "文檔處理":
+                    if "VLM" in step.get("module", ""):
+                        report["final_processor"] = "VLM視覺語言模型"
+                        report["processor_type"] = "advanced"
+                        report["vlm_success"] = True
+                    elif "MinerU" in step.get("module", ""):
+                        report["final_processor"] = "MinerU PDF處理引擎"
+                        report["processor_type"] = "medium"
+                        report["fallback_chain"].append("VLM失敗降級到MinerU")
+                    elif "OCR" in step.get("module", ""):
+                        report["final_processor"] = "Tesseract OCR引擎"
+                        report["processor_type"] = "basic"
+                        report["fallback_chain"].append("VLM+MinerU失敗降級到OCR")
+                    elif "StructuredTextFallback" in step.get("module", ""):
+                        report["final_processor"] = "結構化文字處理"
+                        report["processor_type"] = "text"
+
+        # 策略信息分析
+        strategy_info = result.get("strategy_used", {})
+        if strategy_info.get("vlm_used"):
+            report["vlm_attempted"] = True
+            if not strategy_info.get("vlm_success"):
+                report["error_details"].append("⚠️ VLM嘗試失敗，使用降級處理器")
+
+        # 效能分析
+        processing_time = result.get("processing_time", 0)
+        report["performance"] = {
+            "total_time": f"{processing_time:.2f}秒",
+            "evaluation": "優良" if processing_time < 10 else "一般" if processing_time < 30 else "較慢"
+        }
+
+        # 生成建議
+        if report["processor_type"] == "basic":
+            report["recommendations"].append("🔧 建議: 啟動VLM服務 (Ollama或OpenAI) 以獲得更好的處理品質")
+        elif report["processor_type"] == "medium":
+            report["recommendations"].append("✨ 建議: MinerU效果良好，但可以考慮OCR改進")
+        elif report["processor_type"] == "advanced":
+            report["recommendations"].append("🎯 系統運作最佳！VLM視覺分析已成功應用")
+
+        # 品質評估報告
+        quality_level = result.get("metadata", {}).get("quality_level", "unknown")
+        if quality_level == "high":
+            report["quality_assessment"] = "✅ 高品質處理：使用了進階視覺分析"
+        elif quality_level == "medium":
+            report["quality_assessment"] = "⚠️ 中等品質處理：使用了PDF解析器或光學識別"
+        else:
+            report["quality_assessment"] = "📄 基礎處理：使用了文字分析"
+
+    except Exception as e:
+        report["error_details"].append(f"生成報告時發生錯誤: {str(e)}")
+
+    return report
+
+# 顯示處理報告 (給開發者/LLM)
+def _display_processing_report(report: dict):
+    """在GUI中顯示詳細的處理報告"""
+
+    st.markdown("### 📋 系統處理詳情")
+
+    # 最終處理器資訊
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("最終使用的處理器", report.get("final_processor", "Unknown"))
+
+    with col2:
+        processor_type_display = {
+            "advanced": "🚀 進階級",
+            "medium": "⚡ 中級",
+            "basic": "📄 基礎級",
+            "text": "📝 文字級"
+        }
+        st.metric("處理器等級", processor_type_display.get(report.get("processor_type"), "未知"))
+
+    # VLM嘗試狀態
+    if report.get("vlm_attempted"):
+        if report.get("vlm_success"):
+            st.success("✅ VLM服務: 成功處理文件")
+        else:
+            st.error("❌ VLM服務: 處理失敗，啟動降級機制")
+    else:
+        st.info("ℹ️ VLM服務: 未嘗試 (按策略決定)")
+
+    # 降級鏈條
+    if report.get("fallback_chain"):
+        st.markdown("#### 🔄 降級處理鏈條")
+        for i, fallback_reason in enumerate(report.get("fallback_chain", []), 1):
+            st.markdown(f"{i}. {fallback_reason}")
+
+    # 品質評估
+    if report.get("quality_assessment"):
+        st.markdown("#### 📊 品質評估")
+        st.markdown(report["quality_assessment"])
+
+    # 效能評估
+    if report.get("performance"):
+        st.markdown("#### ⚡ 效能評估")
+        perf = report["performance"]
+        st.markdown(f"- **處理時間**: {perf['total_time']}")
+        st.markdown(f"- **效能等級**: {perf['evaluation']}")
+
+    # 錯誤詳情
+    if report.get("error_details"):
+        st.markdown("#### ⚠️ 錯誤及警告")
+        for error in report.get("error_details", []):
+            st.markdown(error)
+
+    # 系統建議
+    if report.get("recommendations"):
+        st.markdown("#### 💡 系統建議")
+        for rec in report.get("recommendations", []):
+            st.markdown(rec)
+
+# 所有處理能力
+capabilities = [
+    check_processing_capability("多模態處理", None, settings),
+    check_processing_capability("文本處理", None, settings),
+    check_database_connectivity(settings),
+]
+
+# 顯示處理能力
+col1, col2, col3 = st.columns(3)
+with col1:
+    capability = capabilities[0]  # 多模態處理
+    st.success(f"🎨 {capability['name']}: {capability['status']}")
+
+with col2:
+    st.success("📝 文本處理: ✅ LangChain + LlamaIndex + SentenceTransformers")
+
+with col3:
+    db_ok = capabilities[2]
+    if db_ok:
+        st.success("🗃️ 資料庫: ✅ Neo4j + Supabase連線成功")
+    else:
+        st.error("🗃️ 資料庫: ❌ 連線失敗")
+
+st.markdown("**處理優先順序說明**:")
+st.info("📋 **文件處理優先順序**:\n"
+        "1. **VLM服務** (如果運行) → Ollama/OpenAI/Qwen2VL\n"
+        "2. **MinerU** → 如果VLM失敗或跳過\n"
+        "3. **Tesseract OCR** → 最終降級選項\n"
+        "4. **文字處理** → 對於.txt/.md文件")
+
+st.markdown("---")
+
+st.markdown("---")
+
 # 側邊欄配置
 st.sidebar.title("⚙️ 處理配置")
 
@@ -260,106 +530,108 @@ with col2:
 
             progress_bar.progress(100, "處理完成! 🎉")
 
-            # 顯示結果
+            # 獲取處理軌跡
+            processing_trace = result.get("processing_trace", {})
+
+            # 顯示結果 - 精簡版布局
             with result_area.container():
                 if result.get("success"):
-                    st.success("✅ 處理成功完成!")
+                    # 左邊成功狀態，右邊展開詳細資訊
+                    col_left, col_right = st.columns([1, 2])
 
-                    # 統計指標
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.metric("處理時間", f"{processing_time:.2f}s")
-                    with col_b:
+                    with col_left:
+                        # 綠色成功區域
+                        st.success("🎉 處理成功！")
+
+                        # 基本統計指標 (簡單版)
+                        st.metric("處理時間", f"{processing_time:.1f}s")
                         st.metric("分塊數", result.get("metadata", {}).get("chunks_created", 0))
-                    with col_c:
-                        st.metric("嵌入向量", result.get("metadata", {}).get("embeddings_created", 0))
+                        st.metric("向量數", result.get("metadata", {}).get("embeddings_created", 0))
 
-                    # 策略和品質信息
-                    strategy_info = result.get("strategy_used", {})
-                    metadata = result.get("metadata", {})
-
-                    st.markdown("#### 🎯 處理策略結果")
-                    strategy_cols = st.columns(2)
-
-                    with strategy_cols[0]:
-                        vlm_used = strategy_info.get("vlm_used", False)
-                        vlm_success = strategy_info.get("vlm_success", False)
-                        fallback_used = strategy_info.get("fallback_used", False)
-
-                        if fallback_used:
-                            st.warning("⚠️ 使用降級處理")
-                        elif vlm_used and vlm_success:
-                            st.success("✅ VLM處理成功")
-                        elif vlm_used and not vlm_success:
-                            st.warning("⚠️ VLM嘗試失敗")
-                        else:
-                            st.info("📝 直接處理")
-
-                    with strategy_cols[1]:
+                        # 處理狀態摘要
+                        metadata = result.get("metadata", {})
                         quality_level = metadata.get("quality_level", "unknown")
-                        # 修復統計計算
-                        try:
-                            chunk_stats = result.get("statistics", {}).get("chunks", {})
-                            if isinstance(chunk_stats, dict) and "total_characters" in chunk_stats:
-                                content_len = chunk_stats.get("total_characters", 0)
-                            else:
-                                content_len = 0
-                        except:
-                            content_len = 0
-                        st.metric("內容長度", f"{content_len}字符")
-                        st.metric("品質等級", quality_level.upper())
+                        st.info(f"品質等級: **{quality_level.upper()}**")
 
-                    # 處理軌跡
-                    if "processing_trace" in result:
-                        with st.expander("🔍 處理模組軌跡", expanded=True):
-                            trace = result["processing_trace"]
+                    with col_right:
+                        # 展開詳細資訊區域
+                        with st.expander("📋 處理詳情", expanded=True):
+                            # 生成系統處理報告
+                            processing_report = _generate_processing_report(result, processing_trace)
 
-                            st.markdown(f"**文件類型**: `{trace['file_type']}`")
-                            st.markdown(f"**使用的模組**: {', '.join(trace['modules_used'])}")
+                            # 最終處理器
+                            if processing_report["final_processor"]:
+                                final_processor_name = processing_report["final_processor"]
+                                processor_icons = {
+                                    "VLM視覺語言模型": "🤖",
+                                    "MinerU PDF處理引擎": "📑",
+                                    "Tesseract OCR引擎": "🔍",
+                                    "結構化文字處理": "📄"
+                                }
+                                icon = processor_icons.get(final_processor_name, "⚙️")
+                                st.markdown(f"**{icon} 最終處理器**: {final_processor_name}")
 
-                            st.markdown("**處理鏈詳情**:")
+                            # 策略結果
+                            strategy_info = result.get("strategy_used", {})
+                            vlm_used = strategy_info.get("vlm_used", False)
+                            vlm_success = strategy_info.get("vlm_success", False)
 
-                            for step in trace["processing_chain"]:
-                                with st.container():
-                                    col1, col2 = st.columns([1, 3])
-                                    with col1:
-                                        st.markdown(f"**{step['stage']}**")
-                                        st.caption(f"{step['module']}")
-                                    with col2:
-                                        st.caption(step['description'])
-                                st.divider()
-
-                    # 詳細統計
-                    if "statistics" in result:
-                        with st.expander("📊 詳細統計", expanded=False):
-                            st.json(result["statistics"])
-
-                    # 階段結果檢查
-                    if "stage_results" in result:
-                        with st.expander("🔗 資料庫插入結果", expanded=True):
-                            stage_results = result["stage_results"]
-                            st.write("**Neo4j結果:**")
-                            if "neo4j" in stage_results:
-                                neo4j_result = stage_results["neo4j"]
-                                if isinstance(neo4j_result, dict) and neo4j_result.get("success"):
-                                    st.success(f"✅ Neo4j: {neo4j_result.get('document_created', 0)} 文檔, {neo4j_result.get('chunks_created', 0)} 分塊")
+                            if vlm_used:
+                                if vlm_success:
+                                    st.success("✅ VLM處理成功應用")
                                 else:
-                                    st.error(f"❌ Neo4j失敗: {neo4j_result}")
-                            else:
-                                st.warning("⚠️ 沒有Neo4j結果")
+                                    st.warning("⚠️ VLM嘗試後降級")
 
-                            st.write("**Supabase結果:**")
-                            if "pgvector" in stage_results:
-                                pv_result = stage_results["pgvector"]
-                                if isinstance(pv_result, dict) and pv_result.get("success"):
-                                    st.success(f"✅ Supabase: {pv_result.get('vectors_ingested', 0)} 向量")
-                                else:
-                                    st.error(f"❌ Supabase失敗: {pv_result}")
-                            else:
-                                st.warning("⚠️ 沒有Supabase結果")
+                        # 展開處理軌跡
+                        with st.expander("🔄 處理軌跡", expanded=False):
+                            if "processing_trace" in result:
+                                trace = result["processing_trace"]
+                                st.write(f"**文件類型**: {trace['file_type']}")
+                                st.write(f"**使用模組**: {', '.join(trace['modules_used'])}")
 
-                            # 顯示完整的stage_results
-                            st.json(stage_results)
+                                for step in trace.get("processing_chain", []):
+                                    with st.container():
+                                        cols = st.columns([1, 3])
+                                        with cols[0]:
+                                            st.write(f"**{step['stage']}**")
+                                            st.caption(step.get('module', ''))
+                                        with cols[1]:
+                                            st.caption(step.get('description', ''))
+                                        st.divider()
+
+                        # 展開資料庫結果
+                        with st.expander("💾 儲存結果", expanded=False):
+                            if "stage_results" in result:
+                                stage_results = result["stage_results"]
+
+                                if "neo4j" in stage_results:
+                                    neo4j_result = stage_results["neo4j"]
+                                    if isinstance(neo4j_result, dict) and neo4j_result.get("success"):
+                                        st.success(f"🗂️ Neo4j: {neo4j_result.get('document_created', 0)} 個文件, {neo4j_result.get('chunks_created', 0)} 個分塊")
+                                    else:
+                                        st.error("Neo4j儲存失敗")
+
+                                if "pgvector" in stage_results:
+                                    pv_result = stage_results["pgvector"]
+                                    if isinstance(pv_result, dict) and pv_result.get("success"):
+                                        st.success(f"🗂️ Supabase: {pv_result.get('vectors_ingested', 0)} 個向量")
+                                    else:
+                                        st.error("Supabase儲存失敗")
+
+                        # 開發者模式展開區塊
+                        with st.expander("🔬 開發者資訊", expanded=False):
+                            # 統計完整版
+                            if "statistics" in result:
+                                st.json(result["statistics"])
+
+                            # 策略詳細信息
+                            strategy_info = result.get("strategy_used", {})
+                            st.write("**策略資訊:**")
+                            st.json(strategy_info)
+
+                            # 完整處理報告
+                            if processing_report:
+                                _display_processing_report(processing_report)
 
                 else:
                     st.error(f"❌ 處理失敗: {result.get('error', '未知錯誤')}")

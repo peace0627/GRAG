@@ -26,12 +26,18 @@ class KnowledgeExtractor:
         self.entity_types = {}
         if self.extract_entities:
             self.entity_types = {
-                "PERSON": r"(?:Mr\.|Ms\.|Dr\.|Prof\.)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)",
-                "ORGANIZATION": r"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:Inc\.|Ltd\.|Corp\.|LLC\.|Company))?)",
-                "LOCATION": r"(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+(?:City|State|Province|Country))?)",
-                "DATE": r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|\d{1,2}(?:st|nd|rd|th)?)\s+(?:\d{1,2}(?:st|nd|rd|th)?,\s+)?\d{4}\b",
-                "MONEY": r"\$[\d,]+\.?\d*|\b\d+\s+(?:dollars?|USD|euros?|EUR)\b",
-                "PERCENT": r"\b\d+(?:\.\d+)?%\b",
+                # More restrictive person extraction - require title OR first letter capital + spaces + reasonable length
+                "PERSON": r"\b(?:Mr\.|Ms\.|Dr\.|Prof\.|Mrs\.)\s+[A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20})*\b|\b[A-Z][a-z]{2,20}\s+[A-Z][a-z]{2,20}\b",
+                # Organization - require company suffixes OR specific patterns
+                "ORGANIZATION": r"\b[A-Z][a-zA-Z]{2,20}(?:\s+[A-Z][a-zA-Z]{2,20})*(?:\s+(?:Inc\.?|Ltd\.?|Corp\.?|LLC\.?|Company|Corporation|Corporation|University|College))\b",
+                # LOCATION - More specific patterns with location indicators OR city/state/country names
+                "LOCATION": r"\b(?:[A-Z][a-z]{2,20}(?:\s+[A-Z][a-z]{2,20})*(?:\s+(?:City|State|Province|Country|Town|Village|Mountain|River|Lake))\b|[A-Z][a-z]{2,20}\s+[A-Z][a-z]{2,20},?\s*[A-Z]{2,3}?\b)",
+                # DATE - Keep existing robust date matching
+                "DATE": r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|\d{1,2}(?:st|nd|rd|th)?)\s+(?:\d{1,2}(?:st|nd|rd|th)?,?)?\s*\d{4}\b",
+                # MONEY - Keep existing money matching
+                "MONEY": r"\$[\d,]+\.?\d*|\b\d+(?:,\d{3})*(?:\.\d{2})?\s+(?:dollars?|USD|euros?|EUR|pounds?|GBP)\b",
+                # PERCENT - Keep existing percent matching
+                "PERCENT": r"\b\d+(?:\.\d+)?%\b|\b\d+(?:\.\d+)?\s+percent\b",
             }
 
         # Relationship patterns (only if enabled)
@@ -49,7 +55,7 @@ class KnowledgeExtractor:
     def extract_knowledge(self,
                          chunks: List[Dict[str, Any]],
                          visual_facts: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        """Extract complete knowledge from chunks and visual facts
+        """Extract complete knowledge from chunks and visual facts with bulletproof error handling
 
         Args:
             chunks: Document chunks with text content
@@ -58,24 +64,40 @@ class KnowledgeExtractor:
         Returns:
             Dictionary with entities, relations, events, and visual facts
         """
-        try:
-            # Extract from text chunks
-            entities = []
-            relations = []
-            events = []
+        entities = []
+        relations = []
+        events = []
 
-            for chunk in chunks:
-                chunk_entities, chunk_relations, chunk_events = self._extract_from_chunk(chunk)
-                entities.extend(chunk_entities)
-                relations.extend(chunk_relations)
-                events.extend(chunk_events)
+        try:
+            logger.info(f"Starting knowledge extraction from {len(chunks)} chunks")
+
+            # Extract from text chunks with ultra-safe processing
+            for i, chunk in enumerate(chunks):
+                try:
+                    chunk_entities, chunk_relations, chunk_events = self._extract_from_chunk(chunk)
+                    entities.extend(chunk_entities)
+                    relations.extend(chunk_relations)
+                    events.extend(chunk_events)
+                except Exception as chunk_error:
+                    logger.warning(f"Failed to extract from chunk {i}: {str(chunk_error)[:50]}..., continuing with other chunks")
 
             # Process visual facts if provided
-            processed_visual_facts = self._process_visual_facts(visual_facts or [])
+            processed_visual_facts = []
+            try:
+                processed_visual_facts = self._process_visual_facts(visual_facts or [])
+            except Exception as visual_error:
+                logger.warning(f"Failed to process visual facts: {str(visual_error)[:50]}..., using empty list")
 
-            # Filter and deduplicate
-            entities = self._deduplicate_entities(entities)
-            relations = self._deduplicate_relations(relations)
+            # Filter and deduplicate with safe processing
+            try:
+                entities = self._deduplicate_entities(entities)
+            except Exception as dedup_error:
+                logger.warning(f"Entity deduplication failed: {str(dedup_error)[:50]}..., using original entities")
+
+            try:
+                relations = self._deduplicate_relations(relations)
+            except Exception as dedup_error:
+                logger.warning(f"Relation deduplication failed: {str(dedup_error)[:50]}..., using original relations")
 
             knowledge = {
                 "entities": entities,
@@ -88,22 +110,28 @@ class KnowledgeExtractor:
                     "total_events": len(events),
                     "total_visual_facts": len(processed_visual_facts),
                     "extraction_timestamp": datetime.now().isoformat(),
-                    "extractor_version": "1.0.0"
+                    "extractor_version": "2.0.0-bulletproof"
                 }
             }
 
-            logger.info(f"Knowledge extraction complete: {len(entities)} entities, "
+            logger.info(f"Knowledge extraction completed: {len(entities)} entities, "
                        f"{len(relations)} relations, {len(events)} events")
             return knowledge
 
         except Exception as e:
-            logger.error(f"Knowledge extraction failed: {e}")
+            logger.error(f"Critical knowledge extraction failure: {e}")
+            # Return minimal working knowledge structure so system can continue
             return {
                 "entities": [],
                 "relations": [],
                 "events": [],
-                "visual_facts": [],
-                "error": str(e)
+                "visual_facts": visual_facts or [],
+                "metadata": {
+                    "extraction_failed": True,
+                    "error_message": str(e)[:200],
+                    "timestamp": datetime.now().isoformat(),
+                    "extractor_version": "2.0.0-bulletproof-fallback"
+                }
             }
 
     def _extract_from_chunk(self, chunk: Dict[str, Any]) -> Tuple[List[Dict], List[Dict], List[Dict]]:
@@ -112,8 +140,23 @@ class KnowledgeExtractor:
         Returns:
             Tuple of (entities, relations, events)
         """
-        content = chunk.get("content", "")
-        chunk_id = chunk.get("chunk_id")
+        try:
+            content = chunk.get("content", "")
+            if not content or not isinstance(content, str):
+                content = str(content or "")
+
+            chunk_id = chunk.get("chunk_id")
+
+            # Ensure chunk_id is a valid string or UUID
+            if chunk_id is None:
+                chunk_id = "unknown_chunk"
+            try:
+                chunk_id_str = str(chunk_id)
+            except Exception:
+                chunk_id_str = "unknown_chunk"
+        except Exception as e:
+            self.logger.error(f"Error preparing chunk data: {e}")
+            return [], [], []
 
         entities = []
         relations = []
@@ -224,22 +267,28 @@ class KnowledgeExtractor:
 
         return list(relation_map.values())
 
-    def _generate_entity_id(self, name: str, type_: str, chunk_id: str) -> str:
+    def _generate_entity_id(self, name: str, type_: str, chunk_id) -> str:
         """Generate deterministic entity ID"""
         import hashlib
-        hash_obj = hashlib.md5(f"{name}_{type_}_{chunk_id}".encode())
+        # Ensure chunk_id is string
+        chunk_id_str = str(chunk_id) if chunk_id is not None else "none"
+        hash_obj = hashlib.md5(f"{name}_{type_}_{chunk_id_str}".encode())
         return f"ent_{hash_obj.hexdigest()[:16]}"
 
-    def _generate_relation_id(self, subject: str, predicate: str, object_: str, chunk_id: str) -> str:
+    def _generate_relation_id(self, subject: str, predicate: str, object_: str, chunk_id) -> str:
         """Generate deterministic relation ID"""
         import hashlib
-        hash_obj = hashlib.md5(f"{subject}_{predicate}_{object_}_{chunk_id}".encode())
+        # Ensure chunk_id is string
+        chunk_id_str = str(chunk_id) if chunk_id is not None else "none"
+        hash_obj = hashlib.md5(f"{subject}_{predicate}_{object_}_{chunk_id_str}".encode())
         return f"rel_{hash_obj.hexdigest()[:16]}"
 
-    def _generate_event_id(self, event_type: str, chunk_id: str) -> str:
+    def _generate_event_id(self, event_type: str, chunk_id) -> str:
         """Generate deterministic event ID"""
         import hashlib
-        hash_obj = hashlib.md5(f"{event_type}_{chunk_id}_{datetime.now().isoformat()}".encode())
+        # Ensure chunk_id is string
+        chunk_id_str = str(chunk_id) if chunk_id is not None else "none"
+        hash_obj = hashlib.md5(f"{event_type}_{chunk_id_str}_{datetime.now().isoformat()}".encode())
         return f"evt_{hash_obj.hexdigest()[:16]}"
 
     def _calculate_entity_confidence(self, match: str, content: str) -> float:
