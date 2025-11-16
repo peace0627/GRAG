@@ -1,3 +1,90 @@
 # Project planning files (do not commit to version control)
 project/plan.md
 project/progress.md
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Applications and uploads
+uploads/
+data/
+logs/
+temp/
+tmp/
+cache/
+
+# Logs
+*.log
+logs/
+log/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ML/DL data and models
+*.h5
+*.hdf5
+*.ckpt
+*.pt
+*.pth
+*.pb
+*.onnx
+wandb/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
