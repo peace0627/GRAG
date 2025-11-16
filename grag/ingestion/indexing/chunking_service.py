@@ -2,11 +2,11 @@
 
 import logging
 from typing import List, Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from llama_index.core.node_parser import (
     SentenceSplitter,
-    HierarchicalNodeParser,
+    SimpleNodeParser,
     MarkdownNodeParser
 )
 from llama_index.core import Document
@@ -32,8 +32,8 @@ class ChunkingService:
             chunk_overlap=self.chunk_overlap
         )
 
-        self._hierarchical_splitter = HierarchicalNodeParser(
-            chunk_sizes=[2048, 512, 128],  # Large sections, medium, small
+        self._hierarchical_splitter = SimpleNodeParser(
+            chunk_size=2048,
             chunk_overlap=self.chunk_overlap
         )
 
@@ -70,7 +70,7 @@ class ChunkingService:
             # Convert to our format
             chunks = []
             for i, node in enumerate(nodes):
-                chunk_id = UUID()  # Generate unique chunk ID
+                chunk_id = uuid4()  # Generate unique chunk ID
 
                 chunk_data = {
                     "chunk_id": chunk_id,
@@ -123,7 +123,7 @@ class ChunkingService:
                 for region in vlm_output.regions:
                     if region.confidence > 0.8 and len(region.description) > 100:
                         # Create additional chunk for significant visual regions
-                        chunk_id = UUID()
+                        chunk_id = uuid4()
                         chunk_data = {
                             "chunk_id": chunk_id,
                             "document_id": UUID(vlm_output.file_id) if isinstance(vlm_output.file_id, str) else vlm_output.file_id,
