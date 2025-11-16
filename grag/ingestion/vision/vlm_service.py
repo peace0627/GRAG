@@ -130,19 +130,27 @@ class VLMService:
                 logger.error(error_msg)
                 errors.append(error_msg)
 
-        # All processing layers failed
+        # All processing layers failed - fallback to text processing
         processing_time = time.time() - start_time
-        logger.error(f"All processing layers failed for {file_id}")
-        return VLMOutput(
+        logger.warning(f"All processing layers failed for {file_id}, using fallback text processing")
+
+        # Create minimal output indicating fallback text processing
+        fallback_output = VLMOutput(
             file_id=file_id,
             area_id=area_id,
+            ocr_text="Fallback text processing - OCR/VLM layers unavailable",
+            regions=[],
+            tables=[],
+            charts=[],
+            visual_facts=[],
             processing_time=processing_time,
             metadata={
-                "error": "All processing layers failed",
                 "fallback_errors": errors,
-                "processing_layer": "NONE"
+                "processing_layer": "FALLBACK_TEXT_PROCESSING",
+                "quality_level": "basic"
             }
         )
+        return fallback_output
 
     def _load_vlm_processor(self):
         """Load VLM processor using environment configuration

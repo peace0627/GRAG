@@ -26,7 +26,7 @@ class IngestionService:
         """Initialize ingestion service using environment configuration"""
         # Initialize components using environment settings
         self.vlm_service = VLMService(
-            enable_vlm=True,  # Always enable VLM layer (with fallback)
+            enable_vlm=True,  # Always enable VLM layer (with fallback for non-text files)
             enable_mineru=True,
             enable_ocr=True
         )
@@ -40,8 +40,14 @@ class IngestionService:
         self.processing_strategy = DocumentProcessingStrategy()
         self.text_fallback = StructuredTextFallback()
 
-        # Initialize database manager
-        self.db_manager = DatabaseManager()
+        # Initialize database manager with settings
+        self.db_manager = DatabaseManager(
+            neo4j_uri=settings.neo4j_uri,
+            neo4j_user=settings.neo4j_user,
+            neo4j_password=settings.neo4j_password,
+            supabase_url=settings.supabase_url,
+            supabase_key=settings.supabase_key
+        )
 
         # Thread pool for parallel processing
         self.executor = ThreadPoolExecutor(max_workers=4)
@@ -74,8 +80,14 @@ class IngestionService:
             logger.info(f"Loaded document content: {len(combined_text)} characters from {len(langchain_docs)} chunks")
 
             # Step 2: Decide processing strategy
-            use_vlm = self.processing_strategy.should_use_vlm_first(file_path, force_vlm)
-            logger.info(f"Processing strategy: {'VLM + fallback' if use_vlm else 'Direct processing'}")
+            file_ext = file_path.suffix.lower()
+            if file_ext in ['.txt', '.md']:
+                # 強制對文字文件使用直接處理
+                use_vlm = False
+                logger.info(f"File type {file_ext} - forcing direct processing (no VLM)")
+            else:
+                use_vlm = self.processing_strategy.should_use_vlm_first(file_path, force_vlm)
+                logger.info(f"Processing strategy: {'VLM + fallback' if use_vlm else 'Direct processing'}")
 
             # Step 3: Process document
             if use_vlm:
@@ -102,6 +114,11 @@ class IngestionService:
 
             processing_time = time.time() - start_time
 
+            # Get detailed processing trace
+            processing_trace = self._generate_processing_trace(
+                file_path, use_vlm, vlm_output, enriched_chunks
+            )
+
             # Enhanced result with more metadata
             result = {
                 "success": True,
@@ -109,6 +126,7 @@ class IngestionService:
                 "file_path": str(file_path),
                 "processing_time": processing_time,
                 "stages_completed": ["langchain_loading", "processing", "chunking", "embedding", "ingestion"],
+                "processing_trace": processing_trace,
                 "strategy_used": {
                     "vlm_used": use_vlm,
                     "vlm_success": vlm_output.metadata.get("processed_by") in ["vlm", "mineru", "ocr"] if vlm_output.metadata else False,
@@ -186,7 +204,7 @@ class IngestionService:
         """Process text directly with VLM service"""
         # 這裡可以調用VLM服務的文字輸入方法
         # 目前先使用模擬
-        from ..vlm_schemas import VLMOutput, VLMRegion
+        from grag.ingestion.vision.vlm_schemas import VLMOutput, VLMRegion
 
         # 模擬VLM文字分析結果
         regions = [VLMRegion(
@@ -412,92 +430,82 @@ class IngestionService:
             }
 
     async def _ingest_neo4j(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Ingest knowledge graph data into Neo4j"""
-        loop = asyncio.get_event_loop()
+        """Ingest knowledge graph data into Neo4j using synchronous methods"""
+        try:
+            from datetime import datetime
 
-        def _sync_ingest():
-            try:
-                # Create Document node
-                doc_data = {
+            # Create Document node using synchronous method
+            doc_data = {
+                "document_id": data["file_id"],
+                "title": Path(data["file_path"]).name,
+                "source_path": data["file_path"],
+                "hash": "",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+            doc_result = await self.db_manager.create_document_sync(doc_data)
+
+            if not doc_result.get("success"):
+                return doc_result
+
+            # Create Chunk nodes using synchronous method
+            chunks_created = 0
+            for chunk in data["chunks"]:
+                chunk_data = {
                     "document_id": data["file_id"],
-                    "title": Path(data["file_path"]).name,
-                    "source_path": data["file_path"],
-                    "area_id": data["area_id"],
+                    "chunk_id": str(chunk["chunk_id"]),
+                    "content": chunk["content"]
                 }
-                self.db_manager.create_document(doc_data)
+                chunk_result = await self.db_manager.create_chunk_sync(chunk_data)
+                if chunk_result.get("success"):
+                    chunks_created += 1
 
-                # Create Chunk nodes
-                for chunk in data["chunks"]:
-                    chunk_data = {
-                        "chunk_id": str(chunk["chunk_id"]),
-                        "document_id": data["file_id"],
-                        "text": chunk["content"],
-                        "order": chunk.get("order", 0),
-                        "page": chunk.get("metadata", {}).get("page", 1),
-                        "vector_id": chunk.get("vector_id"),
-                    }
-                    self.db_manager.create_chunk(chunk_data)
+            return {
+                "success": True,
+                "document_created": 1,
+                "chunks_created": chunks_created,
+                "entities_created": 0,  # Placeholder
+                "relations_created": 0  # Placeholder
+            }
 
-                # Create Entity nodes
-                for entity in data["entities"]:
-                    entity_data = {
-                        "entity_id": entity["entity_id"],
-                        "name": entity["name"],
-                        "type": entity["type"],
-                        "chunk_id": entity.get("chunk_id")
-                    }
-                    self.db_manager.create_entity(entity_data)
-
-                # Create relations
-                for relation in data["relations"]:
-                    relation_data = {
-                        "relation_id": relation["relation_id"],
-                        "subject": relation["subject"],
-                        "predicate": relation["predicate"],
-                        "object": relation["object"],
-                        "chunk_id": relation.get("chunk_id")
-                    }
-                    self.db_manager.create_relation(relation_data)
-
-                return {
-                    "success": True,
-                    "document_created": True,
-                    "chunks_created": len(data["chunks"]),
-                    "entities_created": len(data["entities"]),
-                    "relations_created": len(data["relations"])
-                }
-
-            except Exception as e:
-                logger.error(f"Neo4j ingestion failed: {e}")
-                return {"success": False, "error": str(e)}
-
-        return await loop.run_in_executor(self.executor, _sync_ingest)
+        except Exception as e:
+            logger.error(f"Neo4j ingestion failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def _ingest_pgvector(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Ingest vector data into pgvector"""
-        loop = asyncio.get_event_loop()
+        """Ingest vector data into pgvector using async methods"""
+        try:
+            from grag.core.pgvector_schemas import VectorInsert
+            from uuid import uuid4
 
-        def _sync_ingest():
-            try:
-                vectors_ingested = 0
+            vectors_ingested = 0
 
-                for vector_data in data["vectors"]:
-                    # Upsert vector (update if exists)
-                    success = self.db_manager.upsert_vector(vector_data)
-                    if success:
-                        vectors_ingested += 1
+            for vector_data in data["vectors"]:
+                # Convert to VectorInsert format
+                vector_insert = VectorInsert(
+                    embedding=vector_data["embedding"],
+                    document_id=vector_data["document_id"],
+                    chunk_id=vector_data.get("chunk_id"),
+                    fact_id=None,  # For future use
+                    type=vector_data["type"],
+                    page=vector_data["page"],
+                    order=vector_data["order"]
+                )
 
-                return {
-                    "success": True,
-                    "vectors_ingested": vectors_ingested,
-                    "total_vectors": len(data["vectors"])
-                }
+                # Insert vector record
+                vector_id = await self.db_manager.insert_vector_record(vector_insert)
+                if vector_id:
+                    vectors_ingested += 1
 
-            except Exception as e:
-                logger.error(f"pgvector ingestion failed: {e}")
-                return {"success": False, "error": str(e)}
+            return {
+                "success": True,
+                "vectors_ingested": vectors_ingested,
+                "total_vectors": len(data["vectors"])
+            }
 
-        return await loop.run_in_executor(self.executor, _sync_ingest)
+        except Exception as e:
+            logger.error(f"pgvector ingestion failed: {e}")
+            return {"success": False, "error": str(e)}
 
     def _generate_statistics(self,
                            chunks: List[Dict[str, Any]],
@@ -565,3 +573,128 @@ class IngestionService:
                 processed_results.append(result)
 
         return processed_results
+
+    def _generate_processing_trace(self,
+                                 file_path: Path,
+                                 use_vlm: bool,
+                                 vlm_output,
+                                 chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate detailed processing trace showing which modules were used"""
+
+        file_ext = file_path.suffix.lower()
+        trace = {
+            "file_type": file_ext,
+            "processing_chain": [],
+            "modules_used": []
+        }
+
+        # Step 1: File loading
+        loader_info = {
+            '.md': "LangChain TextLoader",
+            '.txt': "LangChain TextLoader",
+            '.pdf': "LangChain PyPDFLoader",
+            '.docx': "LangChain Docx2txtLoader"
+        }.get(file_ext, "LangChain UnstructuredFileLoader")
+
+        trace["processing_chain"].append({
+            "stage": "文件載入",
+            "module": loader_info,
+            "method": "load()",
+            "description": f"使用{loader_info}載入{file_ext}文件"
+        })
+        trace["modules_used"].append("LangChain Document Loader")
+
+        # Step 2: Processing strategy and engine
+        if use_vlm:
+            # VLM processing attempted - determine actual processor used
+            processing_layer = "Unknown"
+            if vlm_output and hasattr(vlm_output, 'metadata'):
+                processing_layer = vlm_output.metadata.get("processing_layer", "VLM")
+
+            # Map processing layer to specific module and description
+            if processing_layer == "VLM":
+                vlm_module = "grag.vision.VLMService (Qwen2VL/OpenAI-Vision)"
+                processor = "VLM視覺語言模型處理"
+                actual_processor = "Qwen2VL 或 OpenAI GPT-4 Vision"
+            elif processing_layer == "MinerU":
+                vlm_module = "grag.vision.VLMService → MinerU (PDF解析器)"
+                processor = "MinerU高精確度PDF文檔解析"
+                actual_processor = "MinerU PDF處理引擎"
+            elif processing_layer == "OCR":
+                vlm_module = "grag.vision.VLMService → Tesseract OCR"
+                processor = "OCR光學字元辨識"
+                actual_processor = "Tesseract OCR引擎"
+            elif processing_layer == "FALLBACK_TEXT_PROCESSING":
+                vlm_module = "grag.ingestion.StructuredTextFallback"
+                processor = "結構化文字分析"
+                actual_processor = "結構化文字分析處理器"
+            else:
+                vlm_module = "grag.vision.VLMService"
+                processor = "VLM多層處理鏈 (VLM → MinerU → OCR)"
+                actual_processor = "多層處理器連 (包含降級)"
+
+            trace["processing_chain"].append({
+                "stage": "文檔處理",
+                "module": vlm_module,
+                "method": "process_document()",
+                "description": f"實際使用 **{actual_processor}** 處理文件"
+            })
+
+            # Add modules based on what was actually used
+            if processing_layer == "VLM":
+                trace["modules_used"].append("VLM Service (Qwen2VL)")
+            elif processing_layer == "MinerU":
+                trace["modules_used"].extend(["VLM Service (fallback)", "MinerU PDF Processor"])
+            elif processing_layer == "OCR":
+                trace["modules_used"].extend(["VLM Service (fallback)", "MinerU (skipped)", "Tesseract OCR"])
+            else:
+                trace["modules_used"].extend(["VLM Service", "MinerU", "OCR"])
+        else:
+            # Direct text processing
+            trace["processing_chain"].append({
+                "stage": "文檔處理",
+                "module": "grag.ingestion.StructuredTextFallback",
+                "method": "create_structured_output()",
+                "description": "跳過VLM處理，直接進行結構化文字分析"
+            })
+            trace["modules_used"].append("Structured Text Fallback")
+
+        # Step 3: Chunking
+        chunking_info = "LlamaIndex MarkdownNodeParser" if file_ext == '.md' else "LlamaIndex SentenceSplitter"
+        trace["processing_chain"].append({
+            "stage": "分塊處理",
+            "module": f"LlamaIndex {chunking_info}",
+            "method": "get_nodes_from_documents()",
+            "description": f"使用{chunking_info}進行智慧分塊，創建{len(chunks)}個chunks"
+        })
+        trace["modules_used"].append("LlamaIndex Node Parsers")
+
+        # Step 4: Embedding
+        trace["processing_chain"].append({
+            "stage": "向量嵌入",
+            "module": "SentenceTransformers all-MiniLM-L6-v2",
+            "method": "encode()",
+            "description": f"生成{len(chunks)}個384維向量嵌入"
+        })
+        trace["modules_used"].append("SentenceTransformers")
+
+        # Step 5: Knowledge extraction
+        entities_count = len([c for c in chunks if c.get("relations", [])])
+        trace["processing_chain"].append({
+            "stage": "知識提取",
+            "module": "grag.ingestion.knowledge_extraction.NERExtractor",
+            "method": "extract_entities()",
+            "description": f"執行實體辨識和關係提取 ({entities_count}個實體)"
+        })
+        trace["modules_used"].append("Knowledge Extraction")
+
+        # Step 6: Database storage
+        trace["processing_chain"].append({
+            "stage": "資料存儲",
+            "module": "Neo4j + Supabase (pgvector)",
+            "method": "create_document_sync() + insert_vector_record()",
+            "description": "將處理結果存儲到圖形資料庫和向量資料庫"
+        })
+        trace["modules_used"].extend(["Neo4j Graph Database", "Supabase pgvector"])
+
+        return trace

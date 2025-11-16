@@ -34,6 +34,10 @@ dependencies = [
     "mineru>=2.6.4",
     "pydantic-settings>=2.0.0",
     "langchain-community>=0.4.1",
+    "docx2txt>=0.9",
+    "pypdf>=6.2.0",
+    "openpyxl>=3.1.5",
+    "python-docx>=1.2.0",
 ]
 
 [build-system]

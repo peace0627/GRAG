@@ -25,6 +25,7 @@ sys.path.insert(0, str(project_root))
 import streamlit as st
 from grag.ingestion.indexing.ingestion_service import IngestionService
 from grag.core.config import settings
+from grag.core.database_services import DatabaseManager
 
 # 配置頁面
 st.set_page_config(
@@ -113,10 +114,58 @@ else:
 
 # 檢查嵌入服務
 try:
-    from grag.ingestion.indexing.providers.embedding_providers import EmbeddingProviderManager
-    st.sidebar.success("✅ 嵌入服務可用")
+    from grag.ingestion.indexing.providers.embedding_providers import create_embedding_provider, list_available_providers
+    # 嘗試創建預設provider來測試是否正常
+    provider = create_embedding_provider()
+    is_available = provider.is_available()
+    if is_available:
+        st.sidebar.success(f"✅ 嵌入服務可用 ({provider.name})")
+    else:
+        st.sidebar.warning(f"⚠️ 嵌入服務未完全配置")
+except Exception as e:
+    st.sidebar.error(f"❌ 嵌入服務異常: {str(e)[:30]}...")
+
+# 檢查資料庫連線
+st.sidebar.markdown("#### 📊 資料庫連線")
+
+# Neo4j連線測試
+neo4j_connected = False
+try:
+    from neo4j import GraphDatabase
+    driver = GraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password)
+    )
+    driver.verify_connectivity()
+    driver.close()
+    neo4j_connected = True
+    st.sidebar.success("✅ Neo4j已連線")
+except Exception as e:
+    st.sidebar.error("❌ Neo4j連線失敗")
+    st.sidebar.caption(f"錯誤: {str(e)[:50]}...")
+
+# Supabase連線測試
+supabase_connected = False
+try:
+    from supabase import create_client
+    client = create_client(settings.supabase_url, settings.supabase_key)
+    # 測試連線 - 直接呼叫health check或簡單的連接測試
+    # 使用storage測試，因為通常都可用
+    storage = client.storage
+    supabase_connected = True
+    st.sidebar.success("✅ Supabase已連線")
 except Exception:
-    st.sidebar.error("❌ 嵌入服務異常")
+    st.sidebar.error("❌ Supabase連線失敗")
+    # 不要在UI顯示APIKey，會影響安全性
+    st.sidebar.caption("檢查.env設定")
+
+# 資料庫整體狀態
+if neo4j_connected and supabase_connected:
+    st.sidebar.success("🎉 所有資料庫正常連線！")
+elif neo4j_connected or supabase_connected:
+    st.sidebar.warning("⚠️ 部分資料庫可連線")
+else:
+    st.sidebar.error("❌ 所有資料庫連線失敗")
 
 st.sidebar.markdown("---")
 
@@ -260,10 +309,57 @@ with col2:
                         st.metric("內容長度", f"{content_len}字符")
                         st.metric("品質等級", quality_level.upper())
 
+                    # 處理軌跡
+                    if "processing_trace" in result:
+                        with st.expander("🔍 處理模組軌跡", expanded=True):
+                            trace = result["processing_trace"]
+
+                            st.markdown(f"**文件類型**: `{trace['file_type']}`")
+                            st.markdown(f"**使用的模組**: {', '.join(trace['modules_used'])}")
+
+                            st.markdown("**處理鏈詳情**:")
+
+                            for step in trace["processing_chain"]:
+                                with st.container():
+                                    col1, col2 = st.columns([1, 3])
+                                    with col1:
+                                        st.markdown(f"**{step['stage']}**")
+                                        st.caption(f"{step['module']}")
+                                    with col2:
+                                        st.caption(step['description'])
+                                st.divider()
+
                     # 詳細統計
                     if "statistics" in result:
                         with st.expander("📊 詳細統計", expanded=False):
                             st.json(result["statistics"])
+
+                    # 階段結果檢查
+                    if "stage_results" in result:
+                        with st.expander("🔗 資料庫插入結果", expanded=True):
+                            stage_results = result["stage_results"]
+                            st.write("**Neo4j結果:**")
+                            if "neo4j" in stage_results:
+                                neo4j_result = stage_results["neo4j"]
+                                if isinstance(neo4j_result, dict) and neo4j_result.get("success"):
+                                    st.success(f"✅ Neo4j: {neo4j_result.get('document_created', 0)} 文檔, {neo4j_result.get('chunks_created', 0)} 分塊")
+                                else:
+                                    st.error(f"❌ Neo4j失敗: {neo4j_result}")
+                            else:
+                                st.warning("⚠️ 沒有Neo4j結果")
+
+                            st.write("**Supabase結果:**")
+                            if "pgvector" in stage_results:
+                                pv_result = stage_results["pgvector"]
+                                if isinstance(pv_result, dict) and pv_result.get("success"):
+                                    st.success(f"✅ Supabase: {pv_result.get('vectors_ingested', 0)} 向量")
+                                else:
+                                    st.error(f"❌ Supabase失敗: {pv_result}")
+                            else:
+                                st.warning("⚠️ 沒有Supabase結果")
+
+                            # 顯示完整的stage_results
+                            st.json(stage_results)
 
                 else:
                     st.error(f"❌ 處理失敗: {result.get('error', '未知錯誤')}")

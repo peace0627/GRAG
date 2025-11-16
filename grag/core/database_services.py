@@ -222,44 +222,97 @@ class DatabaseManager:
         logger.info(f"Deleted vector {vector_id}")
 
     # High-level schema-aware operations using Pydantic models
-    async def create_document_node(self, document: DocumentNode) -> UUID:
-        """
-        Create a document node in Neo4j using the DocumentNode schema
+    # Synchronous Neo4j methods using async driver
+    async def create_document_sync(self, document_data: dict) -> dict:
+        """Synchronous document creation for compatibility"""
+        try:
+            # Import here to avoid circular imports
+            from neo4j import GraphDatabase
+            import logging
 
-        Args:
-            document: DocumentNode instance with validated data
-
-        Returns:
-            UUID: The document_id that was created
-        """
-        query = """
-        CREATE (d:Document {
-            document_id: $document_id,
-            title: $title,
-            source_path: $source_path,
-            hash: $hash,
-            created_at: datetime($created_at),
-            updated_at: datetime($updated_at)
-        })
-        RETURN d.document_id as document_id
-        """
-
-        document_data = document.model_dump()
-        async with self.neo4j_session() as session:
-            result = await session.run(query,
-                document_id=str(document.document_id),
-                title=document.title,
-                source_path=document.source_path,
-                hash=document.hash,
-                created_at=document.created_at.isoformat(),
-                updated_at=document.updated_at.isoformat()
+            driver = GraphDatabase.driver(
+                self.neo4j_uri,
+                auth=(self.neo4j_user, self.neo4j_password)
             )
-            record = await result.single()
-            if record:
-                logger.info(f"Created document node: {document.document_id}")
-                return document.document_id
-            else:
-                raise Exception("Failed to create document node")
+
+            with driver.session() as session:
+                result = session.run("""
+                CREATE (d:Document {
+                    document_id: $document_id,
+                    title: $title,
+                    source_path: $source_path,
+                    hash: $hash,
+                    created_at: datetime($created_at),
+                    updated_at: datetime($updated_at)
+                })
+                RETURN d.document_id as document_id
+                """,
+                document_id=document_data["document_id"],
+                title=document_data["title"],
+                source_path=document_data["source_path"],
+                hash=document_data.get("hash", ""),
+                created_at=document_data["created_at"],
+                updated_at=document_data["updated_at"]
+                )
+
+                record = result.single()
+                if record:
+                    logger.info(f"Created Neo4j document node: {document_data['document_id']}")
+                    return {"success": True, "document_created": True}
+                else:
+                    return {"success": False, "error": "No record returned"}
+
+        except Exception as e:
+            logger.error(f"Neo4j document creation failed: {e}")
+            return {"success": False, "error": str(e)}
+        finally:
+            driver.close()
+
+    async def create_chunk_sync(self, chunk_data: dict) -> dict:
+        """Synchronous chunk creation"""
+        try:
+            from neo4j import GraphDatabase
+
+            driver = GraphDatabase.driver(
+                self.neo4j_uri,
+                auth=(self.neo4j_user, self.neo4j_password)
+            )
+
+            with driver.session() as session:
+                # First ensure document exists
+                session.run("""
+                MERGE (d:Document {document_id: $document_id})
+                ON CREATE SET d.title = $title, d.created_at = datetime()
+                """,
+                document_id=chunk_data["document_id"],
+                title="Auto-created document"
+                )
+
+                # Create chunk and relationship
+                result = session.run("""
+                MATCH (d:Document {document_id: $document_id})
+                CREATE (c:Chunk {
+                    chunk_id: $chunk_id,
+                    text: $text,
+                    created_at: datetime()
+                })
+                CREATE (d)-[:HAS_CHUNK]->(c)
+                RETURN c.chunk_id as chunk_id
+                """,
+                document_id=chunk_data["document_id"],
+                chunk_id=chunk_data["chunk_id"],
+                text=chunk_data["content"]
+                )
+
+                records = list(result)  # Consume results
+                logger.info(f"Created Neo4j chunk node: {chunk_data['chunk_id']}")
+                return {"success": True, "chunks_created": 1}
+
+        except Exception as e:
+            logger.error(f"Neo4j chunk creation failed: {e}")
+            return {"success": False, "error": str(e)}
+        finally:
+            driver.close()
 
     async def create_chunk_node(self, chunk: ChunkNode) -> UUID:
         """
@@ -349,23 +402,33 @@ class DatabaseManager:
         Returns:
             UUID: Generated vector_id
         """
-        # Generate vector_id (in real implementation, this would be generated by the app)
-        # For now, we assume it's generated externally
-        vector_id = UUID()  # This should come from the application layer
+        # Generate vector_id
+        from uuid import uuid4
+        vector_id = uuid4()  # 修正: 使用uuid4()而不是空的UUID()
 
-        # Create VectorRecord for insertion
-        vector_record = VectorRecord(
-            vector_id=vector_id,
-            **vector_data.model_dump()
-        )
+        # Convert UUID fields to strings for JSON serialization (Supabase requirement)
+        vector_data_dict = vector_data.model_dump()
+        if vector_data_dict.get('document_id'):
+            vector_data_dict['document_id'] = str(vector_data_dict['document_id'])
+        if vector_data_dict.get('chunk_id'):
+            vector_data_dict['chunk_id'] = str(vector_data_dict['chunk_id'])
+        if vector_data_dict.get('fact_id'):
+            vector_data_dict['fact_id'] = str(vector_data_dict['fact_id'])
+
+        # Create final record dict
+        record_dict = {
+            'vector_id': str(vector_id),  # 轉換為字串供Supabase使用
+            **vector_data_dict
+        }
 
         client = self.get_supabase_client()
-        response = client.table('vectors').insert(vector_record.model_dump()).execute()
+        response = client.table('vectors').insert(record_dict).execute()
 
         if response.data:
             logger.info(f"Inserted vector record: {vector_id}")
             return vector_id
         else:
+            logger.error(f"Supabase insert failed: {response}")
             raise Exception("Failed to insert vector record")
 
     async def get_vector_record(self, vector_id: UUID) -> Optional[VectorRecord]:
