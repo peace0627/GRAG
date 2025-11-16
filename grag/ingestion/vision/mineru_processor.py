@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 import time
 import tempfile
-import os
 
 from .vlm_schemas import VLMOutput, VLMRegion, TableData, ChartData
 

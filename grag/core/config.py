@@ -32,6 +32,22 @@ class Settings(BaseSettings):
     knowledge_area_id: str = "default_area"
     log_level: str = "INFO"
 
+    # === Processing Configuration ===
+    # Text chunking parameters
+    chunk_size: int = 512
+    chunk_overlap: int = 50
+    include_visual_chunks: bool = True
+
+    # Embedding model parameters
+    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_dimension: int = 384
+
+    # Knowledge extraction parameters
+    extract_entities: bool = True
+    extract_relations: bool = True
+    extract_events: bool = True
+    min_entity_confidence: float = 0.5
+
     # === File Upload Configuration ===
     upload_base_path: str = "./uploads"
     max_file_size_mb: int = 50

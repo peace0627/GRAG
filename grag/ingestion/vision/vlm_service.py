@@ -7,7 +7,10 @@ import time
 
 from .ocr_processor import OCRProcessor
 from .mineru_processor import MinerUProcessor
+from .vlm_client import VLMClient
 from .vlm_schemas import VLMOutput, VLMRegion
+
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +18,46 @@ logger = logging.getLogger(__name__)
 class VLMService:
     """Service for vision-language model processing
 
-    Uses MinerU for high-precision PDF processing, OCR as fallback
+    Processing order: VLM → MinerU → OCR (three-layer fallback)
     """
 
-    def __init__(self, prefer_mineru: bool = True):
+    def __init__(self, enable_vlm: bool = True, enable_mineru: bool = True, enable_ocr: bool = True):
         """
-        Initialize VLMService
+        Initialize VLMService with configurable processing layers
 
         Args:
-            prefer_mineru: Whether to prefer MinerU over OCR for PDF processing
+            enable_vlm: Enable VLM processing (first priority)
+            enable_mineru: Enable MinerU processing (second priority)
+            enable_ocr: Enable OCR processing (final fallback)
         """
-        self.ocr_processor = OCRProcessor()
-        self.mineru_processor = MinerUProcessor() if prefer_mineru else None
-        self.prefer_mineru = prefer_mineru
+        # Initialize processors (lazy loading)
+        self.vlm_processor = None  # Placeholder for VLM (Qwen2VL, etc.)
+        self.mineru_processor = None
+        self.ocr_processor = None
+
+        # Enable flags
+        self.enable_vlm = enable_vlm
+        self.enable_mineru = enable_mineru
+        self.enable_ocr = enable_ocr
+
+        # Lazy load based on enable flags
+        if enable_vlm:
+            try:
+                self.vlm_processor = self._load_vlm_processor()
+            except Exception as e:
+                logger.warning(f"VLM processor not available: {e}. VLM will be skipped.")
+
+        if enable_mineru:
+            try:
+                self.mineru_processor = MinerUProcessor()
+            except Exception as e:
+                logger.warning(f"MinerU processor not available: {e}. MinerU will be skipped.")
+
+        if enable_ocr:
+            try:
+                self.ocr_processor = OCRProcessor()
+            except Exception as e:
+                logger.warning(f"OCR processor not available: {e}. OCR will be skipped.")
 
     def process_document(self,
                         file_path: Path,
@@ -35,7 +65,7 @@ class VLMService:
                         area_id: Optional[str] = None) -> VLMOutput:
         """Process a document with vision-language analysis
 
-        Uses MinerU for high-precision PDF processing, OCR as fallback
+        Processing order: VLM → MinerU → OCR (three-layer fallback)
 
         Args:
             file_path: Path to the document file
@@ -45,33 +75,118 @@ class VLMService:
         Returns:
             VLMOutput: Structured results with OCR text, regions, tables, etc.
         """
+        start_time = time.time()
         logger.info(f"Processing document: {file_path} with file_id: {file_id}")
 
-        try:
-            # Use MinerU for PDF processing if available and preferred
-            if self.prefer_mineru and self.mineru_processor and file_path.suffix.lower() == '.pdf':
-                try:
-                    output = self.mineru_processor.process_document(file_path, file_id, area_id)
-                    logger.info(f"MinerU document processing completed for {file_id}")
-                except Exception as mineru_error:
-                    logger.warning(f"MinerU processing failed, falling back to OCR: {mineru_error}")
-                    output = self.ocr_processor.process_file(file_path, file_id, area_id)
-            else:
-                # Use OCR processor for images or when MinerU is disabled
+        errors = []
+
+        # Layer 1: Try VLM processing first
+        if self.enable_vlm and self.vlm_processor:
+            try:
+                logger.info(f"Attempting VLM processing for {file_id}")
+                output = self.vlm_processor.process_document(file_path, file_id, area_id)
+                processing_time = time.time() - start_time
+                output.processing_time = processing_time
+                output.metadata = output.metadata or {}
+                output.metadata["processing_layer"] = "VLM"
+                logger.info(f"VLM processing completed for {file_id} in {processing_time:.2f}s")
+                return output
+            except Exception as e:
+                error_msg = f"VLM processing failed: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Layer 2: Try MinerU processing
+        if self.enable_mineru and self.mineru_processor:
+            try:
+                logger.info(f"Falling back to MinerU processing for {file_id}")
+                output = self.mineru_processor.process_document(file_path, file_id, area_id)
+                processing_time = time.time() - start_time
+                output.processing_time = processing_time
+                output.metadata = output.metadata or {}
+                output.metadata["processing_layer"] = "MinerU"
+                output.metadata["fallback_errors"] = errors
+                logger.info(f"MinerU processing completed for {file_id} in {processing_time:.2f}s")
+                return output
+            except Exception as e:
+                error_msg = f"MinerU processing failed: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Layer 3: Final fallback to OCR processing
+        if self.enable_ocr and self.ocr_processor:
+            try:
+                logger.info(f"Falling back to OCR processing for {file_id}")
                 output = self.ocr_processor.process_file(file_path, file_id, area_id)
+                processing_time = time.time() - start_time
+                output.processing_time = processing_time
+                output.metadata = output.metadata or {}
+                output.metadata["processing_layer"] = "OCR"
+                output.metadata["fallback_errors"] = errors
+                logger.info(f"OCR processing completed for {file_id} in {processing_time:.2f}s")
+                return output
+            except Exception as e:
+                error_msg = f"OCR processing failed: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
 
-            logger.info(f"Document processing completed for {file_id} in {output.processing_time:.2f}s")
-            return output
+        # All processing layers failed
+        processing_time = time.time() - start_time
+        logger.error(f"All processing layers failed for {file_id}")
+        return VLMOutput(
+            file_id=file_id,
+            area_id=area_id,
+            processing_time=processing_time,
+            metadata={
+                "error": "All processing layers failed",
+                "fallback_errors": errors,
+                "processing_layer": "NONE"
+            }
+        )
 
+    def _load_vlm_processor(self):
+        """Load VLM processor using environment configuration
+
+        Returns a VLMClient instance for vision processing
+        """
+        logger.info("Attempting to load VLM processor from environment config")
+
+        # Priority 1: OpenAI API
+        if settings.openai_api_key:
+            logger.info("Loading OpenAI VLM client")
+            try:
+                return VLMClient(
+                    api_type="openai",
+                    base_url="https://api.openai.com/v1",
+                    api_key=settings.openai_api_key
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create OpenAI VLM client: {e}")
+
+        # Priority 2: Qwen2VL (using OpenAI-compatible interface)
+        if settings.qwen2vl_base_url:
+            logger.info("Loading Qwen2VL OpenAI-compatible client")
+            try:
+                return VLMClient(
+                    api_type="openai",
+                    base_url=settings.qwen2vl_base_url,
+                    api_key=settings.qwen2vl_api_key or ""
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create Qwen2VL client: {e}")
+
+        # Priority 3: Ollama local
+        logger.info("Attempting Ollama VLM client (if available)")
+        try:
+            ollama_client = VLMClient(api_type="ollama")
+            # Test if Ollama is available
+            if ollama_client.is_available():
+                return ollama_client
         except Exception as e:
-            logger.error(f"Document processing failed for {file_id}: {e}")
-            # Return minimal output on failure
-            return VLMOutput(
-                file_id=file_id,
-                area_id=area_id,
-                processing_time=0.0,
-                metadata={"error": str(e)}
-            )
+            logger.warning(f"Ollama VLM client not available: {e}")
+
+        # No valid VLM configuration found
+        raise Exception("No valid VLM configuration found in environment variables. Please set OPENAI_API_KEY or QWEN2VL_BASE_URL, or ensure Ollama is running locally.")
 
     def _enhance_with_vlm(self, ocr_output: VLMOutput, file_path: Path) -> VLMOutput:
         """Enhance OCR output with actual VLM processing (placeholder for future)"""
@@ -125,9 +240,15 @@ class VLMService:
 
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics"""
-        # Placeholder for future statistics tracking
         return {
             "supported_formats": ["pdf", "png", "jpg", "jpeg", "bmp", "tiff"],
-            "vlm_enabled": False,
-            "fallback_to_ocr": True
+            "processing_order": "VLM → MinerU → OCR",
+            "vlm_enabled": self.enable_vlm and self.vlm_processor is not None,
+            "mineru_enabled": self.enable_mineru and self.mineru_processor is not None,
+            "ocr_enabled": self.enable_ocr and self.ocr_processor is not None,
+            "fallback_layers": sum([
+                self.enable_vlm and self.vlm_processor is not None,
+                self.enable_mineru and self.mineru_processor is not None,
+                self.enable_ocr and self.ocr_processor is not None
+            ])
         }
