@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     qwen2vl_base_url: str = "https://api.qwen2vl.com"
     qwen2vl_api_key: str = ""
 
+    # Ollama (local VLM service)
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_api_key: str = "ollama"
+    ollama_model: str = "llava"
+
     # === Application Configuration ===
     debug: bool = True
     knowledge_area_id: str = "default_area"

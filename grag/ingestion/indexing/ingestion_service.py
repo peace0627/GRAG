@@ -222,7 +222,7 @@ class IngestionService:
             tables=[],
             charts=[],
             visual_facts=[],
-            metadata={"quality_level": "high"}
+            metadata={"quality_level": "high", "processing_layer": "FALLBACK_TEXT_PROCESSING"}
         )
 
     async def _process_without_vlm_enhanced(self, langchain_docs, file_id: str, file_path: Path):
@@ -613,9 +613,32 @@ class IngestionService:
 
             # Map processing layer to specific module and description
             if processing_layer == "VLM":
-                vlm_module = "grag.vision.VLMService (Qwen2VL/OpenAI-Vision)"
-                processor = "VLM視覺語言模型處理"
-                actual_processor = "Qwen2VL 或 OpenAI GPT-4 Vision"
+                # Determine which VLM provider was actually used
+                vlm_provider = "Unknown"
+                vlm_model = "Unknown"
+                if vlm_output and vlm_output.metadata:
+                    vlm_provider = vlm_output.metadata.get("vlm_provider", "Generic VLM")
+                    vlm_model = vlm_output.metadata.get("vlm_model", "Unknown Model")
+
+                if vlm_provider == "ollama":
+                    vlm_module = f"grag.vision.VLMService → Ollama (本地VLM)"
+                    processor = f"Ollama本地VLM模型處理"
+                    actual_processor = f"{vlm_model} (Ollama本地)"
+                elif vlm_provider == "openai":
+                    vlm_module = f"grag.vision.VLMService → OpenAI (雲端VLM)"
+                    processor = f"OpenAI GPT-4V視覺模型處理"
+                    actual_processor = f"{vlm_model} (OpenAI GPT-4V)"
+                else:
+                    # Check if it's Qwen2VL by examining the URL or other metadata
+                    vlm_name = "Qwen2VL"
+                    if "qwen" in str(settings.qwen2vl_base_url).lower():
+                        vlm_name = "Qwen2VL"
+                    elif "openai" in str(settings.openai_api_key):
+                        vlm_name = "OpenAI GPT-4V"
+
+                    vlm_module = f"grag.vision.VLMService → {vlm_name} (雲端VLM)"
+                    processor = f"{vlm_name}阿里雲或OpenAI兼容視覺模型處理"
+                    actual_processor = f"{vlm_model} ({vlm_name} API)"
             elif processing_layer == "MinerU":
                 vlm_module = "grag.vision.VLMService → MinerU (PDF解析器)"
                 processor = "MinerU高精確度PDF文檔解析"

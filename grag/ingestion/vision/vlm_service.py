@@ -155,11 +155,40 @@ class VLMService:
     def _load_vlm_processor(self):
         """Load VLM processor using environment configuration
 
+        Priority order: Ollama (if configured) → OpenAI → Qwen2VL
+
         Returns a VLMClient instance for vision processing
         """
         logger.info("Attempting to load VLM processor from environment config")
 
-        # Priority 1: OpenAI API
+        # Priority 1: Ollama (check if specifically configured)
+        if hasattr(settings, 'ollama_base_url') and settings.ollama_base_url:
+            logger.info("Loading Ollama VLM client (user configured)")
+            try:
+                return VLMClient(
+                    api_type="ollama",
+                    base_url=settings.ollama_base_url,
+                    api_key=settings.ollama_api_key
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create configured Ollama VLM client: {e}")
+
+        # Priority 2: Ollama (auto-detection if no specific config)
+        logger.info("Checking for local Ollama service")
+        try:
+            ollama_client = VLMClient(
+                api_type="ollama",
+                base_url=getattr(settings, 'ollama_base_url', "http://localhost:11434/v1"),
+                api_key=getattr(settings, 'ollama_api_key', "ollama")
+            )
+            # Test if Ollama is available
+            if ollama_client.is_available():
+                logger.info("Local Ollama service detected and available")
+                return ollama_client
+        except Exception as e:
+            logger.warning(f"Local Ollama service not available: {e}")
+
+        # Priority 3: OpenAI API
         if settings.openai_api_key:
             logger.info("Loading OpenAI VLM client")
             try:
@@ -171,7 +200,7 @@ class VLMService:
             except Exception as e:
                 logger.warning(f"Failed to create OpenAI VLM client: {e}")
 
-        # Priority 2: Qwen2VL (using OpenAI-compatible interface)
+        # Priority 4: Qwen2VL (using OpenAI-compatible interface)
         if settings.qwen2vl_base_url:
             logger.info("Loading Qwen2VL OpenAI-compatible client")
             try:
@@ -183,18 +212,12 @@ class VLMService:
             except Exception as e:
                 logger.warning(f"Failed to create Qwen2VL client: {e}")
 
-        # Priority 3: Ollama local
-        logger.info("Attempting Ollama VLM client (if available)")
-        try:
-            ollama_client = VLMClient(api_type="ollama")
-            # Test if Ollama is available
-            if ollama_client.is_available():
-                return ollama_client
-        except Exception as e:
-            logger.warning(f"Ollama VLM client not available: {e}")
-
         # No valid VLM configuration found
-        raise Exception("No valid VLM configuration found in environment variables. Please set OPENAI_API_KEY or QWEN2VL_BASE_URL, or ensure Ollama is running locally.")
+        raise Exception("No valid VLM configuration found. Available options:\n"
+                       "1. Set OLLAMA_BASE_URL for Ollama service\n"
+                       "2. Set OPENAI_API_KEY for OpenAI API\n"
+                       "3. Set QWEN2VL_BASE_URL for Qwen2VL service\n"
+                       "4. Ensure Ollama is running locally on port 11434")
 
     def _enhance_with_vlm(self, ocr_output: VLMOutput, file_path: Path) -> VLMOutput:
         """Enhance OCR output with actual VLM processing (placeholder for future)"""
