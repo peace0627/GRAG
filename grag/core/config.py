@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # Note: Qwen2VL cloud service has been removed - using local Ollama instead
     # for better privacy, cost control, and performance
+    qwen2vl_api_key: str = ""  # Kept for backward compatibility with app.py checks
 
     # === Application Configuration ===
     debug: bool = True
@@ -58,6 +59,12 @@ class Settings(BaseSettings):
     # === File Upload Configuration ===
     upload_base_path: str = "./uploads"
     max_file_size_mb: int = 50
+
+    # === Neo4j Browser Configuration ===
+    # For GUI database visualization (Neo4j Browser iframe)
+    neo4j_browser_url: str = "http://localhost:7474"
+    neo4j_browser_username: str = "neo4j"  # Used for Browser access
+    neo4j_browser_password: str = "password123"  # Used for Browser access
 
     class Config:
         env_file = ".env"

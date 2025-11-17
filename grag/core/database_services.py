@@ -92,6 +92,80 @@ class DatabaseManager:
             # TODO: Implement rollback logic if needed
             raise
 
+    async def delete_documents_batch(self, document_ids: list[UUID]) -> dict:
+        """Batch cascade delete multiple documents from both databases
+
+        Execution order for each document:
+        1. Delete from Neo4j (removes all related nodes and relationships)
+        2. Only if Neo4j deletion succeeds, delete from Supabase pgvector
+
+        Args:
+            document_ids: List of UUIDs of documents to delete
+
+        Returns:
+            dict: Results with success count, failed deletions, and error details
+        """
+        results = {
+            "total_requested": len(document_ids),
+            "successful_deletions": 0,
+            "failed_deletions": [],
+            "neo4j_failures": [],
+            "supabase_failures": [],
+            "errors": []
+        }
+
+        try:
+            logger.info(f"Starting batch deletion for {len(document_ids)} documents")
+
+            for document_id in document_ids:
+                neo4j_success = False
+                supabase_success = False
+
+                try:
+                    # Step 1: Delete from Neo4j first
+                    await self._delete_document_neo4j(document_id)
+                    neo4j_success = True
+                    logger.info(f"Neo4j deletion successful for document {document_id}")
+
+                    # Step 2: Only if Neo4j succeeded, delete from Supabase
+                    try:
+                        await self._delete_document_vectors(document_id)
+                        supabase_success = True
+                        logger.info(f"Supabase deletion successful for document {document_id}")
+                    except Exception as supabase_error:
+                        logger.error(f"Supabase deletion failed for document {document_id}: {str(supabase_error)}")
+                        results["supabase_failures"].append(str(document_id))
+                        results["errors"].append(f"Supabase failure for {document_id}: {str(supabase_error)}")
+
+                    # Only count as successful if both databases succeeded
+                    if neo4j_success and supabase_success:
+                        results["successful_deletions"] += 1
+                        logger.info(f"Complete deletion successful for document {document_id}")
+                    else:
+                        results["failed_deletions"].append(str(document_id))
+                        error_msg = f"Partial failure for {document_id}: "
+                        if not neo4j_success:
+                            error_msg += "Neo4j failed"
+                        if not supabase_success:
+                            error_msg += "Supabase failed"
+                        results["errors"].append(error_msg)
+
+                except Exception as e:
+                    logger.error(f"Neo4j deletion failed for document {document_id}: {str(e)}")
+                    results["neo4j_failures"].append(str(document_id))
+                    results["failed_deletions"].append(str(document_id))
+                    results["errors"].append(f"Neo4j failure for {document_id}: {str(e)}")
+
+            logger.info(f"Batch deletion completed. Success: {results['successful_deletions']}, Failed: {len(results['failed_deletions'])}")
+            logger.info(f"Neo4j failures: {len(results['neo4j_failures'])}, Supabase failures: {len(results['supabase_failures'])}")
+            return results
+
+        except Exception as e:
+            error_msg = f"Batch deletion critical error: {str(e)}"
+            logger.error(error_msg)
+            results["errors"].append(error_msg)
+            return results
+
     async def delete_chunk_cascade(self, chunk_id: UUID) -> bool:
         """Cascade delete chunk from both databases
 
@@ -157,13 +231,51 @@ class DatabaseManager:
 
     # Internal helper methods
     async def _delete_document_neo4j(self, document_id: UUID):
-        """Delete document and all related nodes from Neo4j"""
-        query = """
+        """Delete document and all related nodes from Neo4j
+
+        This method ensures complete cascade deletion by targeting all nodes
+        that have any relationship (direct or indirect) with the document.
+        """
+        # Step 1: Delete all nodes directly related to the document
+        delete_direct_related_query = """
         MATCH (d:Document {document_id: $document_id})
-        DETACH DELETE d
+        OPTIONAL MATCH (d)-[*]-(related)
+        DETACH DELETE related, d
         """
         async with self.neo4j_session() as session:
-            await session.run(query, document_id=str(document_id))
+            await session.run(delete_direct_related_query, document_id=str(document_id))
+
+        # Step 2: Verify and clean up any orphaned nodes that might still exist
+        # (This handles complex relationships through Entity -> Chunk -> Document paths)
+        cleanup_orphans_query = """
+        // Find any orphaned VisualFacts that have lost their connections
+        MATCH (v:VisualFact)
+        WHERE NOT ()-[]->(v)
+        DETACH DELETE v
+
+        UNION ALL
+
+        // Find any orphaned Entities that only participated in deleted Events
+        MATCH (e:Entity)
+        WHERE NOT ()-[]->(e)
+        DETACH DELETE e
+
+        UNION ALL
+
+        // Find any orphaned Events that lost all participants
+        MATCH (ev:Event)
+        WHERE NOT ()-[]->(ev)
+        DETACH DELETE ev
+
+        UNION ALL
+
+        // Find any remaining orphaned Chunks
+        MATCH (c:Chunk)
+        WHERE NOT ()-[]->(c)
+        DETACH DELETE c
+        """
+        async with self.neo4j_session() as session:
+            await session.run(cleanup_orphans_query)
 
     async def _delete_chunk_neo4j(self, chunk_id: UUID):
         """Delete chunk node from Neo4j"""

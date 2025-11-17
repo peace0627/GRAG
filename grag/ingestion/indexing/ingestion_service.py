@@ -152,7 +152,7 @@ class IngestionService:
                     "relations_extracted": len(knowledge_data.get("relations", [])),
                     "visual_facts": len(vlm_output.visual_facts or []),
                     "original_chunks_loaded": len(langchain_docs),
-                    "quality_level": vlm_output.metadata.get("quality_level", "unknown") if vlm_output.metadata else "unknown",
+                    "quality_level": vlm_output.metadata.get("quality_level", "unknown").lower() if vlm_output.metadata and vlm_output.metadata.get("quality_level") else "unknown",
                 }
             }
 

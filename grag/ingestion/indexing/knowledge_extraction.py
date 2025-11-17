@@ -230,16 +230,20 @@ class KnowledgeExtractor:
         processed_facts = []
 
         for fact in visual_facts:
-            # Enrich with additional metadata
-            enriched_fact = fact.copy()
-            enriched_fact.update({
-                "fact_id": str(UUID()),
-                "processed_at": datetime.now().isoformat(),
-                "confidence": fact.get("confidence", 0.8),
-                "source": "vlm",
-                "temporal_scope": None,  # Could be inferred from text
-            })
-            processed_facts.append(enriched_fact)
+            try:
+                # Enrich with additional metadata
+                enriched_fact = fact.copy()
+                enriched_fact.update({
+                    "fact_id": str(UUID()),
+                    "processed_at": datetime.now().isoformat(),
+                    "confidence": fact.get("confidence", 0.8),
+                    "source": "vlm",
+                    "temporal_scope": None,  # Could be inferred from text
+                })
+                processed_facts.append(enriched_fact)
+            except Exception as fact_error:
+                logger.warning(f"Failed to process individual visual fact: {str(fact_error)[:50]}..., skipping")
+                continue
 
         return processed_facts
 

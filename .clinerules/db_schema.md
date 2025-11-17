@@ -84,4 +84,4 @@ pgvector 作為向量索引服務。
 | 操作                | 執行順序                                                              | 刪除依據 (UUID)                                              |
 | :---------------- | :---------------------------------------------------------------- | :------------------------------------------------------- |
 | **Document 刪除**   | 1. Neo4j DELETE 2. pgvector DELETE                                | `document_id` (用於兩邊的級聯刪除)                                |
-| **Chunk/Fact 刪除** | 1. 應用程式查詢 Neo4j 獲取 `vector_id` 2. Neo4j DELETE 3. pgvector DELETE | Neo4j 使用 `chunk_id/fact_id`， pgvector 使用 **`vector_id`** |
+| **Chunk/Fact 刪除** | 1. 應用程式查詢 Neo4j 獲取 `vector_id` 2. Neo4j DELETE 3. pgvector DELETE | Neo4j 使用 `chunk_id/fact_id`， pgvector 使用 **`vector_id`**

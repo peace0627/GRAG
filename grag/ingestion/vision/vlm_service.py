@@ -165,13 +165,20 @@ class VLMService:
         if hasattr(settings, 'ollama_base_url') and settings.ollama_base_url:
             logger.info("Loading Ollama VLM client (user configured)")
             try:
-                return VLMClient(
+                client = VLMClient(
                     api_type="ollama",
                     base_url=settings.ollama_base_url,
                     api_key=settings.ollama_api_key
                 )
+                # Verify the configured service is actually available
+                if not client.is_available():
+                    raise Exception(f"Configured Ollama service at {settings.ollama_base_url} is not available")
+                logger.info(f"Configured Ollama service verified and available at {settings.ollama_base_url}")
+                return client
             except Exception as e:
-                logger.warning(f"Failed to create configured Ollama VLM client: {e}")
+                logger.warning(f"Failed to create/load configured Ollama VLM client: {e}")
+                # Fail fast - don't fallback to auto-detection when user explicitly configured
+                raise Exception(f"User-configured Ollama service failed: {e}")
 
         # Priority 2: Ollama (auto-detection if no specific config)
         logger.info("Checking for local Ollama service")

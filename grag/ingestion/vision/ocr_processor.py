@@ -35,6 +35,10 @@ class OCRProcessor:
 
         processing_time = time.time() - start_time
 
+        # Assess quality level based on extracted content
+        quality_level = self._assess_quality_level(result)
+        result['metadata']['quality_level'] = quality_level
+
         return VLMOutput(
             file_id=file_id,
             area_id=area_id,
@@ -169,3 +173,29 @@ class OCRProcessor:
             logger.error(f"Table extraction failed: {e}")
 
         return tables
+
+    def _assess_quality_level(self, result: dict) -> str:
+        """Assess the quality level of OCR processing based on extracted content"""
+        ocr_text = result.get('ocr_text', '').strip()
+        regions = result.get('regions', [])
+        tables = result.get('tables', [])
+        metadata = result.get('metadata', {})
+
+        # Basic quality assessment
+        text_length = len(ocr_text)
+        has_error = 'error' in metadata
+
+        # High quality: Good text extraction with tables and regions
+        if text_length > 1000 and len(regions) > 0 and not has_error:
+            return "high"
+
+        # Medium quality: Decent text extraction or table detection
+        if text_length > 100 and (len(tables) > 0 or len(regions) > 0) and not has_error:
+            return "medium"
+
+        # Low quality: Minimal text or error occurred
+        if text_length > 10 or (has_error and text_length > 0):
+            return "low"
+
+        # Basic/fallback quality: Very little or no content
+        return "basic"
