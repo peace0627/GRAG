@@ -1,13 +1,15 @@
 """
-System Check Service
-系統狀態檢查服務，提供各項系統組件的可用性檢查
+Health Service
+獨立的系統健康檢查服務，不依賴任何前端框架
+提供系統組件的狀態檢查和報告生成
 """
-import streamlit as st
+
 from typing import Dict, Any, Optional
 from grag.core.config import settings
 
-class SystemCheckService:
-    """系統狀態檢查服務"""
+
+class HealthService:
+    """系統健康檢查服務"""
 
     def __init__(self):
         pass

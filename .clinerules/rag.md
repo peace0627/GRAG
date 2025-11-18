@@ -17,7 +17,6 @@ langchain 1.0
 langraph 1.0
 LlamaIndex
 FastAPI/GraphQL
-Streamlit
 
 ---
 
@@ -104,7 +103,7 @@ Streamlit
                      (B6) Backend API (FastAPI / GraphQL)
                                       │
                                       ▼
-              (B7) Frontend: Streamlit / Visualization Panel
+              (B7) Frontend: Visualization Panel
              - Graph viewer
              - Chunk viewer
              - VLM region viewer
