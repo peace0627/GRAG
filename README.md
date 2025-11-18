@@ -63,33 +63,48 @@
                                  (GraphRAG DB)
 ```
 
-### 模組結構
+### 當前架構總覽
 ```
 grag/
 ├── core/               # 🔧 核心服務
 │   ├── config.py       # 環境配置管理
 │   ├── database_services.py  # 資料庫服務 (Neo4j + Supabase)
-│   ├── neo4j_schemas.py      # Neo4j 數據模式
-│   └── pgvector_schemas.py   # Supabase 向量模式
-├── agents/             # 🤖 Agentic RAG 邏輯
-│   ├── planner.py      # 查詢規劃
-│   ├── retrieval.py    # 多源檢索
-│   └── reasoning.py    # 推理引擎
+│   ├── health_service.py     # 系統健康檢查 (獨立實現)
+│   ├── cache_manager.py      # 快取管理器 (獨立實現)
+│   └── schemas/       # 資料模式定義
+│       ├── neo4j_schemas.py
+│       └── pgvector_schemas.py
+├── api/                # 🌐 REST API (FastAPI)
+│   └── app.py          # API服務入口
+├── cli.py              # ⚡ 命令行工具 (已完成)
 ├── ingestion/          # 📥 數據引入
-│   ├── langchain_loader.py     # LangChain 文件載入器
-│   ├── vision/         # 📸 多模態處理
-│   └── indexing/       # 📚 索引和向量化
-├── retrieval/          # 🔍 檢索引擎
-│   ├── hybrid_search.py         # 混合搜索 (向量+圖譜)
-│   └── query_engine.py          # 查詢引擎
-├── api/                # 🌐 後端 API (FastAPI)
-├── frontend/           # 💻 前端介面 (Streamlit)
-├── project/            # 📝 專案管理
+│   ├── loaders/        # 文件載入器
+│   ├── processors/     # 處理器
+│   ├── services/       # 服務整合
+│   ├── vision/         # 多模態視覺處理
+│   └── indexing/       # 索引和向量化
+├── agents/             # 🤖 Agentic RAG 邏輯 (準備中)
+├── retrieval/          # 🔍 檢索引擎 (準備中)
+└── __init__.py         # Python包初始化
+```
+
+### 文檔與配置
+```
+├── config/             # 📝 專案管理
+│   ├── plan.md         # 專案計劃
+│   └── progress.md     # 進度追蹤
+├── docs/               # 📚 技術文檔
+│   ├── architecture/   # 架構說明
+│   ├── api/           # API文檔
+│   ├── guides/        # 使用指南
+│   └── development/   # 開發指導
+├── infrastructure/     # 🗃️ 基礎設施配置
+│   ├── neo4j/         # Neo4j配置
+│   ├── supabase/      # Supabase建表腳本
+│   └── docs/          # 架構文檔
+├── scripts/            # 🔧 部署腳本
 ├── tests/              # 🧪 測試套件
-└── database/           # 🗃️ 資料庫配置
-    ├── neo4j/          # Neo4j Docker配置
-    ├── supabase/       # Supabase建表腳本
-    └── docs/           # 資料庫架構文檔
+└── .clinerules/        # AI規則配置
 ```
 
 ## 🚀 快速安裝
@@ -129,10 +144,10 @@ pip install -r requirements.txt
 #### 4. 啟動資料庫
 ```bash
 # Neo4j (Docker)
-uv run database/neo4j/docker/start-neo4j-manual.sh
+uv run infrastructure/neo4j/start-neo4j-manual.sh
 
 # 或使用 docker-compose
-cd database/neo4j/docker
+cd infrastructure/neo4j
 docker-compose up -d neo4j
 ```
 
@@ -142,7 +157,7 @@ docker-compose up -d neo4j
 3. 執行建表腳本：
    ```bash
    # 在Supabase SQL Editor中執行
-   cat database/supabase/supabase-setup.sql
+   cat infrastructure/supabase/supabase-setup.sql
    ```
 
 #### 6. 設定環境變數
@@ -164,24 +179,78 @@ QWEN2VL_BASE_URL=https://api.qwen2vl.com
 
 #### 7. 啟動應用程式
 ```bash
-# 啟動前端介面
-uv run streamlit run grag/frontend/app.py --server.port 8501
+# 啟動REST API服務
+uv run grag-api
 
-# 或啟動後端API
-uv run fastapi run grag/api/main.py
+# 或直接啟動
+uv run uvicorn grag.api.app:app --host 0.0.0.0 --port 8000 --reload
+
+# 檢查API文檔
+# 訪問: http://localhost:8000/docs
 ```
 
 ## 📖 使用說明
 
-### 🎨 Web介面 (Streamlit)
+### 🌐 REST API (FastAPI)
 
-1. **啟動介面**: http://localhost:8501
-2. **上傳文檔**: 支援 PDF、Word (.docx)、Markdown (.md)、純文字 (.txt)
-3. **策略選擇**:
-   - **自動判斷**: 系統根據文件類型選擇最佳處理策略
-   - **強制開啟VLM**: 對所有文件使用多層VLM處理 (會嘗試降級)
-   - **強制關閉**: 跳過VLM，只使用基本文字處理
-4. **查看結果**: 包含處理時間、統計數據和詳細軌跡
+系統現在提供完整的REST API，支援以下操作：
+
+#### 📤 文件上傳
+```bash
+# 單文件上傳
+curl -X POST "http://localhost:8000/upload/single" \
+     -F "file=@document.pdf"
+
+# 批量上傳
+curl -X POST "http://localhost:8000/upload/batch" \
+     -F "files=@doc1.pdf" \
+     -F "files=@doc2.docx"
+```
+
+#### 🗑️ 文件管理
+```bash
+# 删除单个文件
+curl -X DELETE "http://localhost:8000/documents/{document_id}"
+
+# 批量删除
+curl -X DELETE "http://localhost:8000/documents/batch" \
+     -H "Content-Type: application/json" \
+     -d '["uuid1", "uuid2"]'
+```
+
+#### ✅ 系統檢查
+```bash
+# 健康檢查
+curl http://localhost:8000/health
+
+# 查看統計信息
+curl http://localhost:8000/statistics
+```
+
+### ⚡ 命令行工具
+
+提供便捷的CLI工具進行測試和操作：
+
+```bash
+# 檢查系統狀態
+uv run grag health
+
+# 上傳處理文件
+uv run grag upload document.pdf
+
+# 删除文檔
+uv run grag delete <document-uuid>
+
+# 查看統計
+uv run grag stats
+```
+
+### 🔧 文件處理策略
+
+系統支援智慧的文件處理策略：
+- **自動判斷**: 根據文件類型智能選擇最佳處理方式
+- **強制VLM優先**: 對所有文件使用視覺語言模型處理
+- **文字優先**: 跳過VLM，直接處理文字內容
 
 ### 🔧 處理器總覽
 
@@ -247,15 +316,14 @@ LIMIT 10;
 docker ps | grep neo4j
 
 # 重啟Neo4j
-cd database/neo4j/docker
-./start-neo4j-manual.sh
+uv run infrastructure/neo4j/start-neo4j-manual.sh
 ```
 
 #### ❗ Supabase權限錯誤
 ```bash
 # 檢查並執行權限腳本
 # 在Supabase SQL Editor中執行:
-cat database/supabase/supabase-setup.sql
+cat infrastructure/supabase/supabase-setup.sql
 ```
 
 #### ❗ VLM服務不可用
@@ -273,8 +341,11 @@ docker system prune  # 清理Docker
 
 ### 日誌檢視
 ```bash
-# 查看應用程式日誌
-uv run streamlit run grag/frontend/app.py --logger.level=debug
+# 查看API日誌 (啟動時使用 --reload 標誌)
+uv run uvicorn grag.api.app:app --host 0.0.0.0 --port 8000 --reload
+
+# 查看CLI工具輸出
+uv run grag health
 
 # 查看資料庫日誌
 docker logs neo4j-grag

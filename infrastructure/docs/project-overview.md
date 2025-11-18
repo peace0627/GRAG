@@ -17,7 +17,6 @@ langchain 1.0
 langraph 1.0
 LlamaIndex
 FastAPI/GraphQL
-Streamlit
 
 ---
 
