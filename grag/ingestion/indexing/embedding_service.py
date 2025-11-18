@@ -76,6 +76,8 @@ class EmbeddingService:
                     include_visual: bool = True) -> List[Dict[str, Any]]:
         """Embed document chunks and return enriched chunks with vector IDs
 
+        Supports multimodal embedding when using CLIP provider.
+
         Args:
             chunks: List of chunk dictionaries
             include_visual: Whether to process visual chunks differently
@@ -125,13 +127,147 @@ class EmbeddingService:
 
         except Exception as e:
             logger.error(f"Chunk embedding failed: {e}")
-            # Add empty embeddings as fallback
-            for chunk in chunks:
-                if "vector_id" not in chunk:
-                    chunk["vector_id"] = self._generate_vector_id(chunk["chunk_id"])
-                    chunk["embedding"] = [0.0] * self.dimension
-                    chunk["embedding_provider"] = "error_fallback"
+            raise
+
+    def embed_multimodal_chunks(self,
+                              chunks: List[Dict[str, Any]],
+                              visual_facts: Optional[List[Dict[str, Any]]] = None,
+                              image_paths: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Embed chunks with multimodal support (text + visual)
+
+        Uses CLIP for multimodal embedding when available, falls back to text-only.
+
+        Args:
+            chunks: List of chunk dictionaries
+            visual_facts: Optional list of visual facts from VLM
+            image_paths: Optional list of image paths for CLIP embedding
+
+        Returns:
+            Chunks with multimodal embeddings added
+        """
+        if not chunks:
             return chunks
+
+        try:
+            # Check if we have CLIP provider for multimodal embedding
+            is_clip_available = (self.provider and
+                               hasattr(self.provider, 'name') and
+                               self.provider.name == 'clip' and
+                               self.provider.is_available())
+
+            if is_clip_available and (visual_facts or image_paths):
+                logger.info("Using CLIP for multimodal embedding")
+                return self._embed_with_clip_multimodal(chunks, visual_facts, image_paths)
+            else:
+                logger.info("Falling back to text-only embedding")
+                return self.embed_chunks(chunks, include_visual=True)
+
+        except Exception as e:
+            logger.error(f"Multimodal embedding failed: {e}")
+            logger.warning("Falling back to text-only embedding")
+            return self.embed_chunks(chunks, include_visual=True)
+
+    def _embed_with_clip_multimodal(self,
+                                  chunks: List[Dict[str, Any]],
+                                  visual_facts: Optional[List[Dict[str, Any]]] = None,
+                                  image_paths: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Use CLIP for multimodal embedding"""
+        texts_to_embed = []
+        visual_contexts = []
+        chunk_indices = []
+
+        for i, chunk in enumerate(chunks):
+            chunk_text = chunk.get("content", "")
+            chunk_visual_facts = visual_facts or []
+
+            # Create enriched text with visual context
+            enriched_text = self._enrich_text_with_visual_context(chunk_text, chunk_visual_facts)
+            texts_to_embed.append(enriched_text)
+            visual_contexts.append(enriched_text)
+
+            chunk_indices.append(i)
+
+        if not texts_to_embed:
+            logger.warning("No texts to embed in multimodal mode")
+            return chunks
+
+        # Use CLIP to embed texts (CLIP can embed both text and image)
+        try:
+            embeddings = self.provider.embed_texts(texts_to_embed)
+
+            # Add embeddings to chunks
+            for idx, chunk_idx in enumerate(chunk_indices):
+                chunk = chunks[chunk_idx]
+
+                vector_id = self._generate_vector_id(chunk["chunk_id"])
+                chunk["vector_id"] = vector_id
+                chunk["embedding"] = embeddings[idx]
+                chunk["embedding_model"] = self.provider.model_name if self.provider else self.model_name
+                chunk["embedding_dimension"] = self.dimension
+                chunk["embedding_provider"] = "clip_multimodal"
+                chunk["multimodal_enriched"] = True
+
+            logger.info(f"Successfully embedded {len(chunk_indices)} chunks with CLIP multimodal")
+            return chunks
+
+        except Exception as e:
+            logger.error(f"CLIP multimodal embedding failed: {e}")
+            raise
+
+    def _enrich_text_with_visual_context(self, text: str, visual_facts: List[Dict[str, Any]]) -> str:
+        """Enrich text with visual context for better CLIP embedding
+
+        Args:
+            text: Original text content
+            visual_facts: Visual facts from VLM analysis
+
+        Returns:
+            Enriched text with visual descriptions
+        """
+        if not visual_facts:
+            return text
+
+        # Extract visual descriptions and append to text
+        visual_descriptions = []
+        for fact in visual_facts:
+            if isinstance(fact, dict) and "description" in fact:
+                visual_descriptions.append(fact["description"])
+            elif isinstance(fact, str):
+                visual_descriptions.append(fact)
+
+        if not visual_descriptions:
+            return text
+
+        # Combine original text with visual descriptions
+        visual_context = " ".join(visual_descriptions)
+        enriched_text = f"{text}\n\nVisual context: {visual_context}"
+
+        logger.debug(f"Enriched text from {len(text)} to {len(enriched_text)} characters with visual context")
+        return enriched_text
+
+    def embed_visual_regions(self,
+                           regions: List[Dict[str, Any]],
+                           image_path: Optional[str] = None) -> List[List[float]]:
+        """Embed visual regions using CLIP
+
+        Args:
+            regions: List of visual regions with descriptions
+            image_path: Path to the source image
+
+        Returns:
+            List of embedding vectors for each region
+        """
+        if not self.provider or not hasattr(self.provider, 'embed_image_regions'):
+            raise Exception("Visual region embedding requires CLIP provider")
+
+        if not image_path or not regions:
+            return []
+
+        try:
+            return self.provider.embed_image_regions(image_path, regions)
+        except Exception as e:
+            logger.error(f"Visual region embedding failed: {e}")
+            raise
 
     def _generate_vector_id(self, chunk_id) -> str:
         """Generate a deterministic vector ID based on chunk ID

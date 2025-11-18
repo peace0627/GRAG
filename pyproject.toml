@@ -38,6 +38,7 @@ dependencies = [
     "pypdf>=6.2.0",
     "openpyxl>=3.1.5",
     "python-docx>=1.2.0",
+    "nest-asyncio>=1.6.0",
 ]
 
 [build-system]

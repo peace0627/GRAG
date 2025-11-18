@@ -147,6 +147,117 @@ class CohereProvider(EmbeddingProvider):
         return bool(self.api_key)
 
 
+class CLIPProvider(EmbeddingProvider):
+    """CLIP multimodal embedding provider (OpenCLIP)"""
+
+    def __init__(self):
+        from open_clip import create_model_and_transforms, get_tokenizer
+        import torch
+
+        # Use ViT-B/32 as a good balance of quality and speed
+        self.model_name = "ViT-B-32"
+        self.pretrained = "laion2b_s34b_b79k"
+
+        try:
+            self.model, _, self.preprocess = create_model_and_transforms(
+                self.model_name, pretrained=self.pretrained
+            )
+            self.tokenizer = get_tokenizer(self.model_name)
+
+            # Move to GPU if available, otherwise CPU
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.model = self.model.to(self.device)
+            self.model.eval()
+
+            # CLIP uses 512-dimensional embeddings
+            self._dimension = 512
+
+            logger.info(f"CLIP provider initialized on {self.device}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize CLIP model: {e}")
+            self.model = None
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Create text embeddings using CLIP text encoder"""
+        if not self.model:
+            raise Exception("CLIP model not initialized")
+
+        try:
+            import torch
+            import torch.nn.functional as F
+
+            # Tokenize texts
+            text_tokens = self.tokenizer(texts).to(self.device)
+
+            with torch.no_grad():
+                # Get text features
+                text_features = self.model.encode_text(text_tokens)
+
+                # Normalize features
+                text_features = F.normalize(text_features, dim=-1)
+
+            return text_features.cpu().numpy().tolist()
+
+        except Exception as e:
+            logger.error(f"CLIP text embedding failed: {e}")
+            raise
+
+    def embed_images(self, image_paths: List[str]) -> List[List[float]]:
+        """Create image embeddings using CLIP vision encoder"""
+        if not self.model:
+            raise Exception("CLIP model not initialized")
+
+        try:
+            import torch
+            import torch.nn.functional as F
+            from PIL import Image
+
+            images = []
+            for path in image_paths:
+                image = Image.open(path).convert("RGB")
+                image = self.preprocess(image).unsqueeze(0).to(self.device)
+                images.append(image)
+
+            # Stack images into batch
+            image_batch = torch.cat(images)
+
+            with torch.no_grad():
+                # Get image features
+                image_features = self.model.encode_image(image_batch)
+
+                # Normalize features
+                image_features = F.normalize(image_features, dim=-1)
+
+            return image_features.cpu().numpy().tolist()
+
+        except Exception as e:
+            logger.error(f"CLIP image embedding failed: {e}")
+            raise
+
+    def embed_image_regions(self, image_path: str, regions: Optional[List[Dict]] = None) -> List[List[float]]:
+        """Create embeddings for image regions (simplified - uses full image)"""
+        if not self.model:
+            raise Exception("CLIP model not initialized")
+
+        # For now, return full image embedding for each region
+        # TODO: Implement actual region cropping and embedding
+        embeddings = self.embed_images([image_path])
+
+        if regions:
+            # Repeat the same embedding for all regions (temporary)
+            return embeddings * len(regions)
+        else:
+            return embeddings
+
+    def is_available(self) -> bool:
+        return self.model is not None
+
+
 # Simplified factory
 def create_embedding_provider(provider_name: Optional[str] = None) -> EmbeddingProvider:
     """Create embedding provider based on configuration
@@ -175,8 +286,11 @@ def create_embedding_provider(provider_name: Optional[str] = None) -> EmbeddingP
         elif provider_name == "cohere":
             return CohereProvider()
 
+        elif provider_name == "clip":
+            return CLIPProvider()
+
         else:
-            supported = ["sentence_transformers", "openai", "cohere"]
+            supported = ["sentence_transformers", "openai", "cohere", "clip"]
             raise ValueError(f"Unsupported provider '{provider_name}'. Supported: {supported}")
 
     except Exception as e:
@@ -186,7 +300,7 @@ def create_embedding_provider(provider_name: Optional[str] = None) -> EmbeddingP
 
 def list_available_providers() -> List[str]:
     """List all available embedding providers"""
-    return ["sentence_transformers", "openai", "cohere"]
+    return ["sentence_transformers", "openai", "cohere", "clip"]
 
 
 def get_provider_info(provider_name: str) -> Dict[str, Any]:
@@ -212,6 +326,13 @@ def get_provider_info(provider_name: str) -> Dict[str, Any]:
             "cost": "Pay per token",
             "dimension": 1024,
             "description": "Specialized embeddings for enterprise use"
+        },
+        "clip": {
+            "api_key_required": False,
+            "packages": ["open_clip_torch", "torch", "torchvision"],
+            "cost": "Free (local)",
+            "dimension": 512,
+            "description": "Multimodal embeddings for text and images in shared space"
         }
     }
 
