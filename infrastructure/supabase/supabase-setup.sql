@@ -1,10 +1,13 @@
 -- 完整的Supabase vectors表權限修復
 -- 請按順序執行所有SQL語句
 
+-- ⚠️ 注意：向量維度 384 是硬編碼的，與 .env 中的 EMBEDDING_DIMENSION 設定無關！
+-- 如果需要修改向量維度，請直接更改下方的 vector(384) 並重建表
+
 -- 1. 創建vectors表 (如果不存在)
 CREATE TABLE IF NOT EXISTS public.vectors (
     vector_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    embedding vector(384),
+    embedding vector(384),  -- ⚠️ 硬編碼向量維度，與 .env EMBEDDING_DIMENSION 無關
     document_id UUID,
     chunk_id UUID,
     fact_id UUID,
