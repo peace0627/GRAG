@@ -1,7 +1,9 @@
-- 每次執行前確認plan.md、.gitignore 與 progess.md,沒有時請創建並規劃
-- 將plan.md跟progess.md放到project資料夾並不要被更新到git上
-- 每次執行完成在必須有最小變動下，更新plan.md 與 progess.md
+- 每次執行前確認plan.md、與 todos.md,沒有時請參考plan.md創建並規劃todos.md
+- 將plan.md跟todos.md放到project資料夾
+- 建立一個常規的.gitignore 
+- 每次執行完成在必須有最小變動下，更新todos.md與history.md
 - requirements.txt 中不得出現未使用的套件。
+- 當成是引用library跟如何使用帶入的模組請啟動MCP content7確認
 - 跑程式跟測試在uv環境下操作
 - 要使用pydantic控制程式結構
 - 資料庫架構請參考database_schema.md
