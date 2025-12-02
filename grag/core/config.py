@@ -78,5 +78,8 @@ def get_settings() -> Settings:
     return Settings()
 
 
+# Alias for backward compatibility
+get_config = get_settings
+
 # Global settings instance
 settings = get_settings()

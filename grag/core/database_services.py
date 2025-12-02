@@ -12,8 +12,8 @@ from uuid import UUID
 from neo4j import AsyncGraphDatabase
 from supabase import Client, create_client
 
-from .neo4j_schemas import DocumentNode, ChunkNode, VisualFactNode
-from .pgvector_schemas import VectorRecord, VectorInsert
+from .schemas.neo4j_schemas import DocumentNode, ChunkNode, VisualFactNode
+from .schemas.pgvector_schemas import VectorRecord, VectorInsert
 
 logger = logging.getLogger(__name__)
 
