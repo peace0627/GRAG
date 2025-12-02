@@ -20,8 +20,22 @@ class Settings(BaseSettings):
     supabase_key: str = ""
 
     # === AI Model Configuration ===
-    # OpenAI (for completions)
-    openai_api_key: str = ""
+    # LLM Configuration (Centralized)
+    llm_provider: str = "openai"  # openai, anthropic, ollama, etc.
+    llm_model: str = "gpt-4o-mini"
+    llm_temperature: float = 0.1
+    llm_max_tokens: int = 2000
+    openai_api_key: str = ""  # Will be read from OPENAI_API_KEY env var
+
+    # Agent-specific LLM configurations
+    planner_llm_model: str = "gpt-4o-mini"  # Query planning - needs precision
+    reasoner_llm_model: str = "gpt-4o-mini"  # Reasoning tasks - needs analysis
+    answerer_llm_model: str = "gpt-4"       # Final answer generation - needs quality
+    query_parser_llm_model: str = "gpt-4o"  # Structured query parsing - needs understanding
+
+    # Agent-specific temperature settings
+    query_parser_temperature: float = 0.1   # Low temperature for consistent parsing
+    answerer_temperature: float = 0.3       # Slightly higher for natural responses
 
     # Ollama (local VLM service - RECOMMENDED for qwen3-vl and other vision models)
     ollama_base_url: str = "http://localhost:11434/v1"

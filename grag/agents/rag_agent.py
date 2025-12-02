@@ -9,8 +9,8 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 
 from .planner import QueryPlanner
 from .retrieval_agent import RetrievalAgent
@@ -19,6 +19,7 @@ from .tool_agent import ToolAgent, ReflectorAgent
 from .schemas import QueryState, QueryType, Evidence
 from ..core.database_services import DatabaseManager
 from ..core.config import get_config
+from ..core.llm_factory import create_answerer_llm, create_default_llm
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,7 @@ class AgenticRAGAgent:
         self.config = get_config()
 
         # Initialize components
-        self.llm = llm or ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.1
-        )
+        self.llm = llm or create_answerer_llm()
 
         self.db_manager = db_manager or DatabaseManager(
             neo4j_uri=self.config.neo4j_uri,
@@ -276,7 +274,7 @@ class SimpleRAGAgent:
             supabase_key=get_config().supabase_key
         )
         self.retrieval_agent = RetrievalAgent(self.db_manager)
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+        self.llm = create_default_llm()
 
     async def query(self, user_query: str) -> Dict[str, Any]:
         """Simple RAG query without full agent orchestration"""

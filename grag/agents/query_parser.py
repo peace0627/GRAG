@@ -12,7 +12,6 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_openai import ChatOpenAI
 
 from .query_schemas import (
     StructuredQuery,
@@ -24,6 +23,7 @@ from .query_schemas import (
     ReasoningRequirements,
     ResponseFormat
 )
+from ..core.llm_factory import create_query_parser_llm
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +31,10 @@ logger = logging.getLogger(__name__)
 class StructuredQueryParser:
     """LLM-driven query parser for converting natural language to structured JSON"""
 
-    def __init__(self, llm: Optional[ChatOpenAI] = None, model_name: str = "gpt-4o-mini"):
-        self.llm = llm or ChatOpenAI(model=model_name, temperature=0.1)
-        self.model_name = model_name
+    def __init__(self, llm=None):
+        # Use centralized LLM configuration
+        self.llm = llm or create_query_parser_llm()
+        self.model_name = self.llm.model_name if hasattr(self.llm, 'model_name') else "query_parser_llm"
         self._load_parsing_prompts()
 
     def _load_parsing_prompts(self):

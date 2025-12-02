@@ -11,7 +11,6 @@ from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 from .schemas import (
     QueryState,
@@ -20,13 +19,15 @@ from .schemas import (
     PlanStep,
     PlannerOutput
 )
+from ..core.llm_factory import create_planner_llm
 
 
 class QueryPlanner:
     """LangGraph-based query planner agent"""
 
-    def __init__(self, llm: ChatOpenAI = None):
-        self.llm = llm or ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+    def __init__(self, llm=None):
+        # Use centralized LLM configuration
+        self.llm = llm or create_planner_llm()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:

@@ -6,9 +6,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-一個整合**知識圖譜**、**視覺語言模型 (VLM/Qwen2VL)** 和**大語言模型 (LLM)** 的高階 Agentic RAG 系統。
+一個整合**知識圖譜**、**視覺語言模型 (VLM/Qwen2VL)** 和**大語言模型 (LLM)** 的高階 **Agentic RAG 系統**。
 
-支援多模態查詢、自主推理和動態知識圖譜，實現 Agent 自助規劃、跨模態檢索和事實檢查。
+已實現完整的**智能查詢處理能力**，支援多模態查詢、自主推理和動態知識圖譜，實現 Agent 自助規劃、跨模態檢索和事實檢查。
+
+**🎉 核心功能已完成**: Agentic RAG Core (7個專業Agent) + Structured Query Parser + 集中式LLM配置管理
 
 [🚀 快速開始](#快速安裝) • [📖 使用說明](#使用說明) • [🏗️ 架構說明](#架構說明) • [🔧 故障排除](#故障排除)
 
@@ -63,17 +65,28 @@
                                  (GraphRAG DB)
 ```
 
-### 當前架構總覽
+### 當前架構總覽 (v2.0)
 ```
 grag/
 ├── core/               # 🔧 核心服務
-│   ├── config.py       # 環境配置管理
+│   ├── config.py       # 集中式配置管理 (LLM + DB + 應用)
+│   ├── llm_factory.py  # LLM工廠 (集中式LLM實例管理)
 │   ├── database_services.py  # 資料庫服務 (Neo4j + Supabase)
 │   ├── health_service.py     # 系統健康檢查 (獨立實現)
 │   ├── cache_manager.py      # 快取管理器 (獨立實現)
 │   └── schemas/       # 資料模式定義
 │       ├── neo4j_schemas.py
 │       └── pgvector_schemas.py
+├── agents/             # 🤖 Agentic RAG Core (已完成 ✅)
+│   ├── schemas.py      # Agent狀態Schemas
+│   ├── query_schemas.py # Structured Query Schemas ⭐
+│   ├── planner.py      # Query Planner (LangGraph)
+│   ├── retrieval_agent.py # 多模態檢索Agent
+│   ├── reasoning_agent.py # 知識圖譜推理Agent
+│   ├── tool_agent.py   # 動態工具調用Agent + Reflector
+│   ├── query_parser.py # Structured Query Parser ⭐
+│   ├── rag_agent.py    # 主RAG協調器 (AgenticRAGAgent)
+│   └── __init__.py     # Agent模塊初始化
 ├── api/                # 🌐 REST API (FastAPI)
 │   └── app.py          # API服務入口
 ├── cli.py              # ⚡ 命令行工具 (已完成)
@@ -83,7 +96,6 @@ grag/
 │   ├── services/       # 服務整合
 │   ├── vision/         # 多模態視覺處理
 │   └── indexing/       # 索引和向量化
-├── agents/             # 🤖 Agentic RAG 邏輯 (準備中)
 ├── retrieval/          # 🔍 檢索引擎 (準備中)
 └── __init__.py         # Python包初始化
 ```
@@ -262,7 +274,65 @@ uv run grag stats
 | `.txt` | 直接文字處理 | 標準句子分割 |
 | 影像 | VLM處理鏈 | 多層降級策略 |
 
-### 🧪 測試範例
+### 🤖 Agentic RAG 查詢 (核心功能)
+
+系統現在支援完整的Agentic RAG查詢，具有智能規劃、多模態檢索和推理能力：
+
+#### 基本查詢
+```python
+from grag.agents import AgenticRAGAgent
+
+# 初始化Agent
+agent = AgenticRAGAgent()
+
+# 執行智能查詢
+result = await agent.query("圖表顯示哪個月銷售最低？")
+
+print("查詢結果:")
+print(f"- 問題類型: {result['query_type']}")
+print(f"- 最終答案: {result['final_answer']}")
+print(f"- 信心度: {result['confidence_score']}")
+print(f"- 證據數量: {result['evidence_count']}")
+print(f"- 執行時間: {result['execution_time']}秒")
+
+# 詳細的規劃信息
+planning = result['planning_info']
+print(f"執行步驟: {planning['execution_plan_steps']}")
+print(f"建議工具: {planning['suggested_tools']}")
+```
+
+#### 查詢類型識別
+系統能自動識別以下查詢類型：
+- **factual**: 事實性問題 ("What are sales figures?")
+- **visual**: 視覺相關問題 ("圖表顯示什麼?")
+- **analytical**: 分析性問題 ("為什麼營收下降?")
+- **temporal**: 時間相關問題 ("過去一年表現?")
+- **complex**: 複雜推理問題 (多步驟分析)
+
+#### 證據溯源
+每個回答都包含完整的證據鏈：
+```python
+# 查看證據來源
+for evidence in result['evidence']:
+    print(f"來源: {evidence['source_type']}")
+    print(f"內容: {evidence['content'][:100]}...")
+    print(f"信心度: {evidence['confidence']}")
+```
+
+#### 反思與驗證
+系統會對回答進行反思評估：
+```python
+reflection = result['reflection']
+print(f"上下文充足: {reflection['context_sufficient']}")
+print(f"差距識別: {reflection['gaps_identified']}")
+
+if result['needs_clarification']:
+    print("需要澄清的問題:")
+    for question in result['clarification_questions']:
+        print(f"- {question}")
+```
+
+### 🧪 文件處理測試
 
 ```python
 from grag.ingestion.indexing.ingestion_service import IngestionService
@@ -420,6 +490,8 @@ class CustomEmbeddingProvider(BaseEmbeddingProvider):
 
 **享受您的 Agentic RAG 智慧問答系統！** 🚀✨
 
-*打造於 Neo4j + LangChain + Streamlit + Supabase pgvector*
+*核心技術棧: Neo4j + LangChain + LangGraph + Supabase pgvector + OpenAI GPT*
+
+*已實現: Agentic RAG Core (7個專業Agent) + Structured Query Parser + 集中式LLM配置管理*
 
 </div>
