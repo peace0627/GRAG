@@ -20,7 +20,6 @@ GraphRAG (Graph Retrieval-Augmented Generation)
 
 from .core.config import settings
 from .core.health_service import HealthService
-from .core.cache_manager import cache_manager
 
 __version__ = "1.0.0"
 __author__ = "GraphRAG Team"
@@ -28,6 +27,5 @@ __author__ = "GraphRAG Team"
 # 導出主要組件
 __all__ = [
     "settings",
-    "HealthService",
-    "cache_manager"
+    "HealthService"
 ]

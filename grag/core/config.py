@@ -5,6 +5,13 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings
 
+from .constants import (
+    DEFAULT_CHUNK_SIZE,
+    OVERLAP_SIZE,
+    DEFAULT_ENTITY_CONFIDENCE,
+    VECTOR_DIMENSIONS
+)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
@@ -21,10 +28,11 @@ class Settings(BaseSettings):
 
     # === AI Model Configuration ===
     # LLM Configuration (Centralized)
-    llm_provider: str = "openai"  # openai, anthropic, ollama, etc.
+    llm_provider: str = "openai"  # openai, ollama, vllm, lmstudio, custom, etc.
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.1
     llm_max_tokens: int = 2000
+    llm_base_url: str = ""  # Custom API endpoint for OpenAI-compatible services
     openai_api_key: str = ""  # Will be read from OPENAI_API_KEY env var
 
     # Agent-specific LLM configurations
@@ -53,8 +61,8 @@ class Settings(BaseSettings):
 
     # === Processing Configuration ===
     # Text chunking parameters
-    chunk_size: int = 512
-    chunk_overlap: int = 50
+    chunk_size: int = DEFAULT_CHUNK_SIZE
+    chunk_overlap: int = OVERLAP_SIZE
     include_visual_chunks: bool = True
 
     # Embedding service configuration
@@ -62,13 +70,13 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""                        # API key for cloud providers
     embedding_base_url: str = ""                       # Custom API endpoint
     embedding_model: str = "all-MiniLM-L6-v2"           # Model identifier
-    embedding_dimension: int = 384                      # Expected embedding dimension
+    embedding_dimension: int = VECTOR_DIMENSIONS["sentence_transformers"]  # Expected embedding dimension
 
     # Knowledge extraction parameters
     extract_entities: bool = True
     extract_relations: bool = True
     extract_events: bool = True
-    min_entity_confidence: float = 0.5
+    min_entity_confidence: float = DEFAULT_ENTITY_CONFIDENCE
 
     # === File Upload Configuration ===
     upload_base_path: str = "./uploads"

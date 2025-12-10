@@ -143,16 +143,18 @@ class AgenticRAGAgent:
             }
 
     async def _generate_final_answer(self, query_state: QueryState) -> str:
-        """Generate the final answer using LLM with collected evidence"""
+        """Generate the final answer using LLM with source-aware evidence processing"""
         if not query_state.collected_evidence:
-            return "I couldn't find sufficient information to answer your question. Could you provide more details?"
+            return "I couldn't find sufficient information to answer your question. Could you provide more details."
 
-        # Prepare context for LLM
-        evidence_texts = []
-        for i, evidence in enumerate(query_state.collected_evidence[:5]):  # Limit to top 5 evidence
-            evidence_texts.append(f"[{i+1}] {evidence.content} (Confidence: {evidence.confidence:.2f})")
+        # Convert evidence to UnifiedEvidence format for enhanced processing
+        unified_evidence = await self._convert_to_unified_evidence(query_state.collected_evidence)
 
-        evidence_summary = "\n".join(evidence_texts)
+        # Detect and handle contradictions
+        contradiction_analysis = self._analyze_evidence_contradictions(unified_evidence)
+
+        # Prepare source-aware context for LLM
+        evidence_context = self._build_source_aware_evidence_context(unified_evidence)
 
         # Prepare reasoning context
         reasoning_context = ""
@@ -165,28 +167,17 @@ Reasoning Analysis:
 - Confidence: {reasoning.confidence:.2f}
 """
 
-        # Create prompt for final answer generation
-        system_prompt = """You are an expert assistant that provides accurate, well-reasoned answers based on the provided evidence.
-
-Guidelines:
-1. Base your answer primarily on the provided evidence
-2. If evidence is insufficient, clearly state this and suggest what additional information would help
-3. Provide confidence levels for your statements
-4. When appropriate, cite evidence numbers [1], [2], etc.
-5. Keep answers concise but comprehensive
-6. For complex questions, break down your reasoning step by step
-
-Always include a confidence assessment at the end."""
+        # Create enhanced prompt for final answer generation
+        system_prompt = self._build_source_aware_system_prompt(contradiction_analysis)
 
         user_prompt = f"""
 Query: {query_state.original_query}
 
-Evidence Available:
-{evidence_summary}
+{evidence_context}
 
 {reasoning_context}
 
-Please provide a comprehensive answer based on the above evidence. Include your confidence level and cite sources where relevant."""
+Please provide a comprehensive answer based on the above evidence. Consider source reliability and note any contradictions."""
 
         try:
             messages = [
@@ -197,15 +188,223 @@ Please provide a comprehensive answer based on the above evidence. Include your 
             response = await self.llm.ainvoke(messages)
             final_answer = response.content.strip()
 
-            # Add confidence assessment if not present
-            if "confidence" not in final_answer.lower() and query_state.confidence_score > 0:
-                final_answer += f"\n\nOverall confidence: {query_state.confidence_score:.2f}"
+            # Add source traceability and contradiction warnings
+            final_answer = self._enhance_answer_with_traceability(
+                final_answer, unified_evidence, contradiction_analysis, query_state.confidence_score
+            )
 
             return final_answer
 
         except Exception as e:
             logger.error(f"Final answer generation failed: {e}")
             return f"I encountered an error while generating the final answer: {str(e)}. However, I found {len(query_state.collected_evidence)} pieces of evidence that may be relevant."
+
+    async def _convert_to_unified_evidence(self, evidence_list: List[Any]) -> List[Dict[str, Any]]:
+        """Convert collected evidence to unified format with source awareness"""
+        from ..core.schemas.unified_schemas import SourceType, Modality
+
+        unified_evidence = []
+
+        for evidence in evidence_list:
+            # Handle different evidence formats
+            if hasattr(evidence, 'model_dump'):  # Already UnifiedEvidence
+                unified_evidence.append(evidence.model_dump())
+            else:  # Legacy Evidence format
+                unified_item = {
+                    "evidence_id": getattr(evidence, 'evidence_id', f"evidence_{len(unified_evidence)}"),
+                    "source_type": getattr(evidence, 'source_type', 'unknown'),
+                    "modality": getattr(evidence, 'modality', Modality.TEXT.value),
+                    "content": getattr(evidence, 'content', ''),
+                    "summary": getattr(evidence, 'summary', None),
+                    "confidence": getattr(evidence, 'confidence', 0.5),
+                    "relevance_score": getattr(evidence, 'relevance_score', 0.5),
+                    "quality_score": getattr(evidence, 'quality_score', 0.5),
+                    "traceability": getattr(evidence, 'traceability', None),
+                    "metadata": getattr(evidence, 'metadata', {}),
+                    "created_at": getattr(evidence, 'created_at', None)
+                }
+                unified_evidence.append(unified_item)
+
+        return unified_evidence
+
+    def _analyze_evidence_contradictions(self, evidence_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze evidence for contradictions and conflicts"""
+        analysis = {
+            "has_contradictions": False,
+            "contradiction_count": 0,
+            "conflicting_evidence_pairs": [],
+            "severity": "none",  # none, low, medium, high
+            "recommendations": []
+        }
+
+        if len(evidence_list) < 2:
+            return analysis
+
+        # Simple contradiction detection (can be enhanced with LLM)
+        content_hashes = {}
+        contradictions_found = []
+
+        for i, evidence in enumerate(evidence_list):
+            content_hash = hash(evidence["content"].lower().strip()[:100])  # First 100 chars
+
+            if content_hash in content_hashes:
+                existing_idx = content_hashes[content_hash]
+                # Check if confidence scores differ significantly
+                conf_diff = abs(evidence["confidence"] - evidence_list[existing_idx]["confidence"])
+
+                if conf_diff > 0.3:  # Significant confidence difference
+                    contradictions_found.append({
+                        "evidence_1": existing_idx,
+                        "evidence_2": i,
+                        "confidence_diff": conf_diff,
+                        "content_similarity": "high"
+                    })
+
+            content_hashes[content_hash] = i
+
+        if contradictions_found:
+            analysis["has_contradictions"] = True
+            analysis["contradiction_count"] = len(contradictions_found)
+            analysis["conflicting_evidence_pairs"] = contradictions_found
+
+            # Assess severity
+            if len(contradictions_found) >= 3:
+                analysis["severity"] = "high"
+            elif len(contradictions_found) >= 2:
+                analysis["severity"] = "medium"
+            else:
+                analysis["severity"] = "low"
+
+            analysis["recommendations"] = [
+                "Consider the source reliability of conflicting evidence",
+                "Look for additional corroborating evidence",
+                "Note uncertainty in areas with conflicting information"
+            ]
+
+        return analysis
+
+    def _build_source_aware_evidence_context(self, evidence_list: List[Dict[str, Any]]) -> str:
+        """Build evidence context with source awareness for LLM"""
+        if not evidence_list:
+            return "No evidence available."
+
+        context_parts = ["Evidence Available (with source information):"]
+
+        for i, evidence in enumerate(evidence_list[:8]):  # Limit to top 8 evidence
+            source_info = self._format_source_info(evidence)
+            modality_info = f"[{evidence.get('modality', 'text').upper()}]"
+
+            evidence_text = f"""
+[{i+1}] {modality_info} {evidence['content']}
+    Source: {source_info}
+    Confidence: {evidence['confidence']:.2f}, Relevance: {evidence.get('relevance_score', 0.5):.2f}
+    Quality: {evidence.get('quality_score', 0.5):.2f}
+"""
+
+            # Add traceability info if available
+            if evidence.get('traceability'):
+                trace = evidence['traceability']
+                if trace.get('document_path'):
+                    evidence_text += f"    Document: {trace['document_path']}\n"
+                if trace.get('extraction_method'):
+                    evidence_text += f"    Extraction: {trace['extraction_method']}\n"
+
+            context_parts.append(evidence_text)
+
+        # Add source reliability guide
+        reliability_guide = """
+
+Source Reliability Guide:
+- Neo4j: Graph database - best for relationship and structural information
+- Supabase: Vector database - best for semantic similarity and content matching
+- Hybrid: Combined sources - generally most reliable
+- External: Third-party sources - verify independently
+
+Higher confidence scores indicate more reliable evidence."""
+
+        context_parts.append(reliability_guide)
+
+        return "\n".join(context_parts)
+
+    def _format_source_info(self, evidence: Dict[str, Any]) -> str:
+        """Format source information for display"""
+        source_type = evidence.get('source_type', 'unknown')
+
+        if source_type == 'neo4j':
+            return "Knowledge Graph (Neo4j) - Structural relationships"
+        elif source_type == 'supabase':
+            return "Vector Database (Supabase) - Semantic similarity"
+        elif source_type == 'hybrid':
+            return "Hybrid Sources - Combined reliability"
+        else:
+            return f"{source_type} - External source"
+
+    def _build_source_aware_system_prompt(self, contradiction_analysis: Dict[str, Any]) -> str:
+        """Build system prompt that considers source awareness and contradictions"""
+        base_prompt = """You are an expert assistant that provides accurate, well-reasoned answers based on the provided evidence.
+
+Guidelines:
+1. Base your answer primarily on the provided evidence, considering source reliability
+2. Pay special attention to source types: Neo4j (relationships), Supabase (similarity), Hybrid (combined)
+3. When appropriate, cite evidence numbers [1], [2], etc. with their source types
+4. Keep answers concise but comprehensive
+5. For complex questions, break down your reasoning step by step
+"""
+
+        # Add contradiction handling if needed
+        if contradiction_analysis["has_contradictions"]:
+            severity = contradiction_analysis["severity"]
+            contradiction_guidance = f"""
+
+IMPORTANT: Evidence contains contradictions (Severity: {severity.upper()})
+- Acknowledge conflicting information in your answer
+- Explain which sources you prioritize and why
+- Note uncertainty where contradictions exist
+- Suggest areas needing clarification
+"""
+            base_prompt += contradiction_guidance
+
+        base_prompt += "\nAlways include a confidence assessment and source attribution at the end."
+
+        return base_prompt
+
+    def _enhance_answer_with_traceability(self, answer: str, evidence_list: List[Dict[str, Any]],
+                                        contradiction_analysis: Dict[str, Any],
+                                        overall_confidence: float) -> str:
+        """Enhance answer with traceability information and contradiction warnings"""
+        enhanced_answer = answer
+
+        # Add contradiction warning if needed
+        if contradiction_analysis["has_contradictions"]:
+            severity_descriptions = {
+                "high": "significant conflicting evidence",
+                "medium": "some conflicting information",
+                "low": "minor contradictions noted"
+            }
+
+            warning = f"\n\n⚠️ Note: Answer based on evidence with {severity_descriptions[contradiction_analysis['severity']]}. "
+            warning += f"Found {contradiction_analysis['contradiction_count']} conflicting evidence pairs."
+
+            enhanced_answer += warning
+
+        # Add source attribution
+        source_counts = {}
+        for evidence in evidence_list[:5]:  # Top 5 evidence
+            source = evidence.get('source_type', 'unknown')
+            source_counts[source] = source_counts.get(source, 0) + 1
+
+        if source_counts:
+            attribution = "\n\n📚 Sources used: " + ", ".join([
+                f"{source} ({count})" for source, count in source_counts.items()
+            ])
+            enhanced_answer += attribution
+
+        # Add confidence assessment
+        if overall_confidence > 0:
+            confidence_level = "High" if overall_confidence > 0.8 else "Medium" if overall_confidence > 0.6 else "Low"
+            enhanced_answer += f"\n\n🎯 Overall confidence: {confidence_level} ({overall_confidence:.2f})"
+
+        return enhanced_answer
 
     async def get_system_status(self) -> Dict[str, Any]:
         """Get the current status of all agents and components"""

@@ -73,7 +73,6 @@ grag/
 │   ├── llm_factory.py  # LLM工廠 (集中式LLM實例管理)
 │   ├── database_services.py  # 資料庫服務 (Neo4j + Supabase)
 │   ├── health_service.py     # 系統健康檢查 (獨立實現)
-│   ├── cache_manager.py      # 快取管理器 (獨立實現)
 │   └── schemas/       # 資料模式定義
 │       ├── neo4j_schemas.py
 │       └── pgvector_schemas.py

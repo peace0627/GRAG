@@ -182,7 +182,6 @@ grag/
 │   ├── __init__.py
 │   ├── config.py          # 組態管理
 │   ├── health_service.py  # 健康檢查
-│   ├── cache_manager.py   # 快取管理
 │   └── schemas/           # 數據模式
 │       ├── __init__.py
 │       ├── neo4j_schemas.py

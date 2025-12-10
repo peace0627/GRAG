@@ -2,13 +2,17 @@
 Retrieval Agent
 
 This module implements the retrieval agent that performs multi-modal search
-across vector databases and knowledge graphs.
+across vector databases and knowledge graphs with enhanced merging and caching.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from uuid import UUID
 import time
+import hashlib
+from functools import lru_cache
+import asyncio
+from collections import defaultdict
 
 from .schemas import (
     RetrievalResult,
@@ -27,6 +31,18 @@ class RetrievalAgent:
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         self.db_manager = db_manager or self._initialize_db_manager()
         self.config = get_config()
+
+        # Initialize caching system
+        self._result_cache = {}
+        self._cache_ttl = 300  # 5 minutes cache TTL
+        self._cache_timestamps = {}
+
+        # Enhanced merging strategies
+        self._merging_strategies = {
+            'weighted_fusion': self._weighted_fusion_merge,
+            'source_aware_merge': self._source_aware_merge,
+            'adaptive_merge': self._adaptive_merge
+        }
 
     def _initialize_db_manager(self) -> DatabaseManager:
         """Initialize database manager from config"""
@@ -284,47 +300,387 @@ class RetrievalAgent:
     def _merge_results(self, vector_results: List[Dict[str, Any]],
                       graph_results: List[Dict[str, Any]],
                       parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Merge and rank vector and graph results"""
-        merged = []
+        """Enhanced merge and rank vector and graph results with intelligent fusion"""
 
-        # Simple merging strategy: combine and deduplicate by content
-        seen_content = set()
+        # Choose merging strategy based on parameters
+        merge_strategy = parameters.get('merge_strategy', 'adaptive_merge')
+        merge_func = self._merging_strategies.get(merge_strategy, self._adaptive_merge)
 
-        # Add vector results first
-        for result in vector_results:
-            content_key = result.get('content', '')[:100]  # Use first 100 chars as key
-            if content_key not in seen_content:
-                merged.append({
-                    **result,
-                    'source': 'vector',
-                    'combined_score': result.get('similarity_score', 0.5)
-                })
-                seen_content.add(content_key)
+        logger.info(f"Using merge strategy: {merge_strategy}")
 
-        # Add graph results with lower priority
-        for result in graph_results:
-            # Extract content key from graph result
-            if 'event' in result and result['event']:
-                content_key = result['event'].get('description', '')[:100]
-            elif 'source_entity' in result and result['source_entity']:
-                content_key = result['source_entity'].get('name', '')[:100]
-            else:
-                content_key = str(result)[:100]
+        # Apply selected merging strategy
+        merged_results = merge_func(vector_results, graph_results, parameters)
 
-            if content_key not in seen_content:
-                merged.append({
-                    **result,
-                    'source': 'graph',
-                    'combined_score': result.get('relevance_score', 0.3) or result.get('confidence', 0.3)
-                })
-                seen_content.add(content_key)
+        # Apply diversity and quality filtering
+        filtered_results = self._apply_diversity_filter(merged_results, parameters)
 
-        # Sort by combined score
-        merged.sort(key=lambda x: x['combined_score'], reverse=True)
+        # Apply final ranking with recency and authority bonuses
+        final_results = self._apply_enhanced_ranking(filtered_results, parameters)
+
+        # Cache results for future use
+        cache_key = self._generate_cache_key(vector_results, graph_results, parameters)
+        self._cache_results(cache_key, final_results)
 
         # Apply final limit
         max_results = parameters.get('top_k', 20)
-        return merged[:max_results]
+        return final_results[:max_results]
+
+    def _weighted_fusion_merge(self, vector_results: List[Dict[str, Any]],
+                              graph_results: List[Dict[str, Any]],
+                              parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Weighted fusion with normalized scores"""
+        all_results = []
+
+        # Normalize and weight vector results
+        for result in vector_results:
+            normalized_score = self._normalize_score(result.get('similarity_score', 0.5), 'vector')
+            weighted_score = normalized_score * 0.6  # 60% weight for vector similarity
+
+            all_results.append({
+                **result,
+                'source': 'vector',
+                'normalized_score': normalized_score,
+                'weighted_score': weighted_score,
+                'combined_score': weighted_score
+            })
+
+        # Normalize and weight graph results
+        for result in graph_results:
+            score = result.get('relevance_score', 0.5) or result.get('confidence', 0.5)
+            normalized_score = self._normalize_score(score, 'graph')
+            weighted_score = normalized_score * 0.4  # 40% weight for graph relevance
+
+            all_results.append({
+                **result,
+                'source': 'graph',
+                'normalized_score': normalized_score,
+                'weighted_score': weighted_score,
+                'combined_score': weighted_score
+            })
+
+        return all_results
+
+    def _source_aware_merge(self, vector_results: List[Dict[str, Any]],
+                           graph_results: List[Dict[str, Any]],
+                           parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Source-aware merging considering content type and modality"""
+        all_results = []
+
+        # Process vector results with source awareness
+        for result in vector_results:
+            content_type = result.get('type', 'chunk')
+            modality_bonus = 1.2 if content_type == 'vlm_region' else 1.0  # Boost visual content
+
+            normalized_score = self._normalize_score(result.get('similarity_score', 0.5), 'vector')
+            source_weight = self._get_source_weight('vector', result, parameters)
+            combined_score = normalized_score * source_weight * modality_bonus
+
+            all_results.append({
+                **result,
+                'source': 'vector',
+                'combined_score': combined_score,
+                'modality_bonus': modality_bonus,
+                'source_weight': source_weight
+            })
+
+        # Process graph results with source awareness
+        for result in graph_results:
+            inference_bonus = 1.3 if result.get('inference_type') == 'multi_hop_reasoning' else 1.0
+            temporal_bonus = 1.2 if 'temporal' in str(result).lower() else 1.0
+
+            score = result.get('relevance_score', 0.5) or result.get('confidence', 0.5)
+            normalized_score = self._normalize_score(score, 'graph')
+            source_weight = self._get_source_weight('graph', result, parameters)
+            combined_score = normalized_score * source_weight * inference_bonus * temporal_bonus
+
+            all_results.append({
+                **result,
+                'source': 'graph',
+                'combined_score': combined_score,
+                'inference_bonus': inference_bonus,
+                'temporal_bonus': temporal_bonus,
+                'source_weight': source_weight
+            })
+
+        return all_results
+
+    def _adaptive_merge(self, vector_results: List[Dict[str, Any]],
+                       graph_results: List[Dict[str, Any]],
+                       parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Adaptive merging based on query characteristics and result quality"""
+
+        # Analyze query intent
+        query_type = parameters.get('query_type', 'factual')
+        requires_precision = parameters.get('requires_high_precision', False)
+
+        # Choose strategy based on query characteristics
+        if query_type == 'visual':
+            # Prioritize visual vector results
+            return self._modality_focused_merge(vector_results, graph_results, 'visual')
+        elif query_type == 'temporal':
+            # Prioritize temporal graph results
+            return self._modality_focused_merge(vector_results, graph_results, 'temporal')
+        elif query_type in ['analytical', 'causal']:
+            # Balance precision and coverage
+            return self._precision_coverage_merge(vector_results, graph_results, parameters)
+        elif requires_precision:
+            # Use source reliability weighting
+            return self._source_reliability_merge(vector_results, graph_results)
+        else:
+            # Default weighted fusion
+            return self._weighted_fusion_merge(vector_results, graph_results, parameters)
+
+    def _modality_focused_merge(self, vector_results: List[Dict[str, Any]],
+                               graph_results: List[Dict[str, Any]],
+                               modality: str) -> List[Dict[str, Any]]:
+        """Merge with focus on specific modality"""
+        all_results = []
+
+        modality_weights = {
+            'visual': {'vector': 1.5, 'graph': 0.5},
+            'temporal': {'vector': 0.6, 'graph': 1.4},
+            'relational': {'vector': 0.4, 'graph': 1.6}
+        }
+
+        weights = modality_weights.get(modality, {'vector': 1.0, 'graph': 1.0})
+
+        # Apply modality-specific weighting
+        for result in vector_results:
+            score = result.get('similarity_score', 0.5)
+            combined_score = score * weights['vector']
+            all_results.append({**result, 'source': 'vector', 'combined_score': combined_score})
+
+        for result in graph_results:
+            score = result.get('relevance_score', 0.5) or result.get('confidence', 0.5)
+            combined_score = score * weights['graph']
+            all_results.append({**result, 'source': 'graph', 'combined_score': combined_score})
+
+        return all_results
+
+    def _precision_coverage_merge(self, vector_results: List[Dict[str, Any]],
+                                 graph_results: List[Dict[str, Any]],
+                                 parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Balance precision (graph) and coverage (vector)"""
+        precision_weight = 0.6  # Graph results get higher weight for precision
+        coverage_weight = 0.4   # Vector results provide coverage
+
+        all_results = []
+
+        for result in vector_results:
+            score = result.get('similarity_score', 0.5)
+            combined_score = score * coverage_weight
+            all_results.append({**result, 'source': 'vector', 'combined_score': combined_score})
+
+        for result in graph_results:
+            score = result.get('relevance_score', 0.5) or result.get('confidence', 0.5)
+            combined_score = score * precision_weight
+            all_results.append({**result, 'source': 'graph', 'combined_score': combined_score})
+
+        return all_results
+
+    def _source_reliability_merge(self, vector_results: List[Dict[str, Any]],
+                                 graph_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge based on learned source reliability scores"""
+        # Reliability scores (could be learned from user feedback)
+        reliability_scores = {
+            'vector': 0.75,
+            'graph': 0.85
+        }
+
+        all_results = []
+
+        for result in vector_results:
+            score = result.get('similarity_score', 0.5)
+            reliability = reliability_scores['vector']
+            combined_score = score * reliability
+            all_results.append({**result, 'source': 'vector', 'combined_score': combined_score})
+
+        for result in graph_results:
+            score = result.get('relevance_score', 0.5) or result.get('confidence', 0.5)
+            reliability = reliability_scores['graph']
+            combined_score = score * reliability
+            all_results.append({**result, 'source': 'graph', 'combined_score': combined_score})
+
+        return all_results
+
+    def _apply_diversity_filter(self, results: List[Dict[str, Any]],
+                               parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply diversity filtering to avoid over-representation of similar content"""
+        if len(results) <= 5:
+            return results  # No filtering needed for small result sets
+
+        # Group by content similarity
+        content_groups = defaultdict(list)
+        for result in results:
+            content_key = self._generate_content_signature(result)
+            content_groups[content_key].append(result)
+
+        # Apply diversity penalty
+        diversity_penalty = 0.1  # 10% penalty per additional item from same group
+        filtered_results = []
+
+        for group in content_groups.values():
+            if len(group) == 1:
+                filtered_results.extend(group)
+            else:
+                # Sort group by score and apply penalty
+                group_sorted = sorted(group, key=lambda x: x['combined_score'], reverse=True)
+                for i, item in enumerate(group_sorted):
+                    penalty = i * diversity_penalty
+                    item['combined_score'] *= (1 - penalty)
+                filtered_results.extend(group_sorted)
+
+        return filtered_results
+
+    def _apply_enhanced_ranking(self, results: List[Dict[str, Any]],
+                               parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply enhanced ranking with multiple factors"""
+        for result in results:
+            base_score = result['combined_score']
+
+            # Recency bonus (if temporal info available)
+            recency_bonus = self._calculate_recency_bonus(result)
+
+            # Authority bonus (based on source and metadata)
+            authority_bonus = self._calculate_authority_bonus(result)
+
+            # Relevance bonus (based on query matching)
+            relevance_bonus = self._calculate_relevance_bonus(result, parameters)
+
+            # Combine bonuses (diminishing returns)
+            total_bonus = min(recency_bonus + authority_bonus + relevance_bonus, 0.5)
+            result['final_score'] = base_score * (1 + total_bonus)
+
+        # Sort by final score
+        results.sort(key=lambda x: x['final_score'], reverse=True)
+
+        return results
+
+    def _normalize_score(self, score: float, source_type: str) -> float:
+        """Normalize scores to 0-1 range based on source characteristics"""
+        if source_type == 'vector':
+            # Vector scores are typically 0-1, but can be cosine similarity
+            return max(0.0, min(1.0, score))
+        elif source_type == 'graph':
+            # Graph scores might be different scales, normalize to 0-1
+            return max(0.0, min(1.0, score))
+        else:
+            return max(0.0, min(1.0, score))
+
+    def _get_source_weight(self, source_type: str, result: Dict[str, Any],
+                          parameters: Dict[str, Any]) -> float:
+        """Get dynamic source weight based on content and parameters"""
+        base_weights = {
+            'vector': 0.7,
+            'graph': 0.8
+        }
+
+        weight = base_weights.get(source_type, 0.5)
+
+        # Adjust based on content type
+        if source_type == 'vector':
+            content_type = result.get('type', 'chunk')
+            if content_type == 'vlm_region':
+                weight *= 1.2  # Boost visual content
+        elif source_type == 'graph':
+            if result.get('inference_type') == 'multi_hop_reasoning':
+                weight *= 1.1  # Boost reasoning results
+
+        return weight
+
+    def _calculate_recency_bonus(self, result: Dict[str, Any]) -> float:
+        """Calculate recency bonus based on temporal information"""
+        # Placeholder - would use actual timestamp information
+        return 0.05 if result.get('temporal_relevance') else 0.0
+
+    def _calculate_authority_bonus(self, result: Dict[str, Any]) -> float:
+        """Calculate authority bonus based on source credibility"""
+        authority_bonus = 0.0
+
+        if result['source'] == 'graph':
+            if result.get('inference_type') == 'multi_hop_reasoning':
+                authority_bonus += 0.1
+            if result.get('connection_strength', 0) > 5:
+                authority_bonus += 0.05
+
+        return authority_bonus
+
+    def _calculate_relevance_bonus(self, result: Dict[str, Any],
+                                  parameters: Dict[str, Any]) -> float:
+        """Calculate relevance bonus based on query-parameter matching"""
+        relevance_bonus = 0.0
+
+        # Boost visual results for visual queries
+        if parameters.get('modality') == 'visual' and result.get('type') == 'vlm_region':
+            relevance_bonus += 0.15
+
+        # Boost temporal results for temporal queries
+        if parameters.get('temporal') and 'temporal' in str(result).lower():
+            relevance_bonus += 0.1
+
+        return relevance_bonus
+
+    def _generate_content_signature(self, result: Dict[str, Any]) -> str:
+        """Generate content signature for diversity filtering"""
+        content_parts = []
+
+        if result['source'] == 'vector':
+            content_parts.append(result.get('content', '')[:50])
+        elif result['source'] == 'graph':
+            if 'event' in result and result['event']:
+                content_parts.append(str(result['event'].get('description', ''))[:50])
+            elif 'source_entity' in result and result['source_entity']:
+                content_parts.append(str(result['source_entity'].get('name', ''))[:50])
+
+        content_parts.append(result['source'])
+        content_parts.append(str(result.get('document_id', '')))
+
+        return "|".join(content_parts)
+
+    def _generate_cache_key(self, vector_results: List[Dict[str, Any]],
+                           graph_results: List[Dict[str, Any]],
+                           parameters: Dict[str, Any]) -> str:
+        """Generate cache key for results"""
+        # Create deterministic key based on result characteristics
+        key_components = [
+            str(len(vector_results)),
+            str(len(graph_results)),
+            str(parameters.get('top_k', 10)),
+            str(parameters.get('merge_strategy', 'adaptive_merge'))
+        ]
+
+        return hashlib.md5("|".join(key_components).encode()).hexdigest()
+
+    def _cache_results(self, cache_key: str, results: List[Dict[str, Any]]) -> None:
+        """Cache results for future use"""
+        self._result_cache[cache_key] = results.copy()
+        self._cache_timestamps[cache_key] = time.time()
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        current_time = time.time()
+
+        # Clean expired entries
+        expired_keys = [
+            key for key, timestamp in self._cache_timestamps.items()
+            if current_time - timestamp > self._cache_ttl
+        ]
+
+        for key in expired_keys:
+            self._result_cache.pop(key, None)
+            self._cache_timestamps.pop(key, None)
+
+        return {
+            'cache_size': len(self._result_cache),
+            'expired_cleaned': len(expired_keys),
+            'cache_ttl': self._cache_ttl
+        }
+
+    def clear_cache(self) -> None:
+        """Clear all cached results"""
+        self._result_cache.clear()
+        self._cache_timestamps.clear()
+        logger.info("Cache cleared")
 
     def _get_content_preview(self, vector_item: Dict[str, Any]) -> str:
         """Get content preview from vector item"""

@@ -147,7 +147,6 @@
 
 #### 🔧 核心服務遷移
 - **HealthService** → `grag/core/health_service.py` (獨立實現，不依賴Streamlit)
-- **CacheManager** → `grag/core/cache_manager.py` (獨立LRU快取實現)
 
 #### ⚙️ 新增生產工具
 - **FastAPI服務**: `grag/api/app.py` - 完整的REST API

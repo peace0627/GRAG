@@ -350,28 +350,171 @@ class IngestionService:
 
     async def _run_embedding_and_knowledge_extraction(self,
                                                    chunks: List[Dict[str, Any]],
-                                                   visual_facts: List[Dict[str, Any]]):
-        """Run embedding and knowledge extraction"""
-        # Embed chunks
+                                                   visual_facts: List[Dict[str, Any]],
+                                                   file_path: Optional[Path] = None,
+                                                   file_id: Optional[str] = None,
+                                                   processing_metadata: Optional[Dict[str, Any]] = None):
+        """Run embedding and knowledge extraction with enhanced traceability"""
+        from datetime import datetime
+        from ..core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
+
+        processing_metadata = processing_metadata or {}
+        processing_start = datetime.now()
+
+        # Embed chunks with quality tracking
+        logger.info("Running embedding generation...")
         embedded_chunks = self.embedding_service.embed_chunks(chunks)
 
-        # Extract knowledge
+        # Add traceability and quality assessment to each chunk
+        for i, chunk in enumerate(embedded_chunks):
+            chunk_traceability = TraceabilityInfo(
+                source_type=SourceType.NEO4J,  # Chunks are stored in Neo4j
+                source_id=chunk.get("chunk_id"),
+                document_id=file_id or "unknown",
+                document_path=str(file_path) if file_path else "unknown",
+                page_number=chunk.get("metadata", {}).get("page", 1),
+                chunk_order=chunk.get("order", i),
+                processing_timestamp=processing_start,
+                processing_pipeline=["langchain_loading", "chunking", "embedding", "knowledge_extraction"],
+                extraction_method=ExtractionMethod.LLM,  # Chunks are created by LLM-based processing
+                quality_score=self._assess_chunk_quality(chunk),
+                processing_metadata={
+                    **processing_metadata,
+                    "embedding_model": self.embedding_service.model_name,
+                    "embedding_dimension": self.embedding_service.dimension,
+                    "chunking_strategy": "sentence_based"
+                }
+            )
+
+            chunk["traceability"] = chunk_traceability.model_dump()
+            chunk["modality"] = Modality.TEXT.value
+            chunk["content_type"] = "chunk"
+            chunk["confidence"] = chunk_traceability.quality_score
+
+        # Extract knowledge with traceability
+        logger.info("Running knowledge extraction...")
         knowledge_data = self.knowledge_extractor.extract_knowledge(
             embedded_chunks, visual_facts
         )
 
-        # Add knowledge relations back to chunks
+        # Enhance knowledge data with traceability
+        enhanced_entities = []
         for entity in knowledge_data.get("entities", []):
+            entity_traceability = TraceabilityInfo(
+                source_type=SourceType.NEO4J,
+                source_id=entity.get("entity_id"),
+                document_id=file_id or "unknown",
+                document_path=str(file_path) if file_path else "unknown",
+                processing_timestamp=datetime.now(),
+                processing_pipeline=["knowledge_extraction", "ner"],
+                extraction_method=ExtractionMethod.NER,
+                quality_score=entity.get("confidence", 0.8),
+                processing_metadata={
+                    "extractor_used": "NERExtractor",
+                    "entity_type": entity.get("type"),
+                    "chunk_id": entity.get("chunk_id")
+                }
+            )
+
+            enhanced_entity = {
+                **entity,
+                "traceability": entity_traceability.model_dump(),
+                "modality": Modality.RELATIONAL.value,
+                "content_type": "entity",
+                "confidence": entity.get("confidence", 0.8)
+            }
+            enhanced_entities.append(enhanced_entity)
+
+        # Enhance relations with traceability
+        enhanced_relations = []
+        for relation in knowledge_data.get("relations", []):
+            relation_traceability = TraceabilityInfo(
+                source_type=SourceType.NEO4J,
+                source_id=f"{relation.get('source_id')}_{relation.get('target_id')}",
+                document_id=file_id or "unknown",
+                document_path=str(file_path) if file_path else "unknown",
+                processing_timestamp=datetime.now(),
+                processing_pipeline=["knowledge_extraction", "relation_extraction"],
+                extraction_method=ExtractionMethod.RULE_BASED,
+                quality_score=relation.get("confidence", 0.7),
+                processing_metadata={
+                    "relation_type": relation.get("type"),
+                    "extraction_method": "pattern_matching"
+                }
+            )
+
+            enhanced_relation = {
+                **relation,
+                "traceability": relation_traceability.model_dump(),
+                "modality": Modality.RELATIONAL.value,
+                "content_type": "relation",
+                "confidence": relation.get("confidence", 0.7)
+            }
+            enhanced_relations.append(enhanced_relation)
+
+        # Enhance visual facts with traceability
+        enhanced_visual_facts = []
+        for fact in visual_facts:
+            fact_traceability = TraceabilityInfo(
+                source_type=SourceType.SUPABASE,  # Visual facts come from VLM/vector processing
+                source_id=fact.get("fact_id", f"visual_fact_{len(enhanced_visual_facts)}"),
+                document_id=file_id or "unknown",
+                document_path=str(file_path) if file_path else "unknown",
+                page_number=fact.get("page", 1),
+                processing_timestamp=datetime.now(),
+                processing_pipeline=["vlm_processing", "visual_analysis"],
+                extraction_method=ExtractionMethod.VLM,
+                quality_score=fact.get("confidence", 0.8),
+                processing_metadata={
+                    "vlm_provider": processing_metadata.get("vlm_provider"),
+                    "region_type": fact.get("modality"),
+                    "bbox": fact.get("bbox")
+                }
+            )
+
+            enhanced_fact = {
+                **fact,
+                "traceability": fact_traceability.model_dump(),
+                "modality": Modality.VISUAL.value,
+                "content_type": "visual_fact",
+                "confidence": fact.get("confidence", 0.8)
+            }
+            enhanced_visual_facts.append(enhanced_fact)
+
+        # Add enhanced relations back to chunks with full traceability
+        for entity in enhanced_entities:
             chunk_id = entity.get("chunk_id")
             for chunk in embedded_chunks:
                 if str(chunk["chunk_id"]) == chunk_id:
                     chunk.setdefault("relations", []).append({
                         "type": "entity",
                         "entity_id": entity["entity_id"],
-                        "entity_type": entity["type"]
+                        "entity_type": entity["type"],
+                        "confidence": entity["confidence"],
+                        "traceability": entity["traceability"],
+                        "extraction_method": entity["traceability"]["extraction_method"]
                     })
 
-        return embedded_chunks, knowledge_data
+        # Update knowledge data with enhanced information
+        enhanced_knowledge_data = {
+            **knowledge_data,
+            "entities": enhanced_entities,
+            "relations": enhanced_relations,
+            "visual_facts": enhanced_visual_facts,
+            "processing_stats": {
+                "chunks_processed": len(embedded_chunks),
+                "entities_extracted": len(enhanced_entities),
+                "relations_extracted": len(enhanced_relations),
+                "visual_facts_processed": len(enhanced_visual_facts),
+                "processing_time": (datetime.now() - processing_start).total_seconds(),
+                "quality_assessment": self._assess_knowledge_quality(enhanced_entities, enhanced_relations)
+            }
+        }
+
+        logger.info(f"Knowledge extraction completed: {len(enhanced_entities)} entities, "
+                   f"{len(enhanced_relations)} relations, {len(enhanced_visual_facts)} visual facts")
+
+        return embedded_chunks, enhanced_knowledge_data
 
     async def _run_database_ingestion(self,
                                     file_id: str,
@@ -721,3 +864,104 @@ class IngestionService:
         trace["modules_used"].extend(["Neo4j Graph Database", "Supabase pgvector"])
 
         return trace
+
+    def _assess_chunk_quality(self, chunk: Dict[str, Any]) -> float:
+        """Assess the quality of a chunk based on various factors"""
+        quality_score = 0.5  # Base score
+
+        content = chunk.get("content", "")
+
+        # Content length assessment
+        content_length = len(content.strip())
+        if content_length > 500:
+            quality_score += 0.2  # Good length
+        elif content_length < 50:
+            quality_score -= 0.2  # Too short
+
+        # Content coherence (simple heuristics)
+        sentences = content.split('.')
+        if len(sentences) > 2:
+            quality_score += 0.1  # Multiple sentences
+
+        # Special character ratio
+        special_chars = sum(1 for c in content if not c.isalnum() and not c.isspace())
+        special_ratio = special_chars / max(len(content), 1)
+
+        if special_ratio > 0.3:
+            quality_score -= 0.1  # Too many special characters
+
+        # Check for meaningful content
+        meaningful_words = sum(1 for word in content.split() if len(word) > 2)
+        if meaningful_words < 3:
+            quality_score -= 0.2  # Not enough meaningful content
+
+        return max(0.1, min(1.0, quality_score))  # Clamp between 0.1 and 1.0
+
+    def _assess_knowledge_quality(self, entities: List[Dict[str, Any]],
+                                 relations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Assess the overall quality of extracted knowledge"""
+        assessment = {
+            "overall_score": 0.5,
+            "entity_quality": 0.5,
+            "relation_quality": 0.5,
+            "diversity_score": 0.5,
+            "issues": []
+        }
+
+        # Entity quality assessment
+        if entities:
+            entity_scores = [e.get("confidence", 0.5) for e in entities]
+            avg_entity_confidence = sum(entity_scores) / len(entity_scores)
+
+            # Check entity diversity
+            entity_types = set(e.get("type", "unknown") for e in entities)
+            type_diversity = len(entity_types) / max(len(entities), 1)
+
+            assessment["entity_quality"] = (avg_entity_confidence + type_diversity) / 2
+
+            if len(entities) < 3:
+                assessment["issues"].append("insufficient_entities")
+            if avg_entity_confidence < 0.6:
+                assessment["issues"].append("low_entity_confidence")
+        else:
+            assessment["issues"].append("no_entities_extracted")
+            assessment["entity_quality"] = 0.0
+
+        # Relation quality assessment
+        if relations:
+            relation_scores = [r.get("confidence", 0.5) for r in relations]
+            avg_relation_confidence = sum(relation_scores) / len(relation_scores)
+
+            # Check relation diversity
+            relation_types = set(r.get("type", "unknown") for r in relations)
+            relation_diversity = len(relation_types) / max(len(relations), 1)
+
+            assessment["relation_quality"] = (avg_relation_confidence + relation_diversity) / 2
+
+            if len(relations) < 2:
+                assessment["issues"].append("insufficient_relations")
+        else:
+            assessment["issues"].append("no_relations_extracted")
+            assessment["relation_quality"] = 0.0
+
+        # Diversity assessment
+        total_items = len(entities) + len(relations)
+        unique_types = len(set(e.get("type", "unknown") for e in entities) |
+                          set(r.get("type", "unknown") for r in relations))
+
+        assessment["diversity_score"] = unique_types / max(total_items, 1)
+
+        # Overall score calculation
+        weights = {
+            "entity_quality": 0.4,
+            "relation_quality": 0.3,
+            "diversity_score": 0.3
+        }
+
+        assessment["overall_score"] = (
+            assessment["entity_quality"] * weights["entity_quality"] +
+            assessment["relation_quality"] * weights["relation_quality"] +
+            assessment["diversity_score"] * weights["diversity_score"]
+        )
+
+        return assessment

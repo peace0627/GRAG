@@ -2,15 +2,14 @@
 LLM Factory - Centralized LLM instance management
 
 This module provides a centralized factory for creating LLM instances
-with proper configuration management and provider abstraction.
+with support for multiple providers including OpenAI, Ollama, and OpenAI-compatible APIs.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 from langchain_openai import ChatOpenAI
-# Future: from langchain_anthropic import ChatAnthropic
-# Future: from langchain_ollama import ChatOllama
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from .config import get_config
 
@@ -18,10 +17,53 @@ logger = logging.getLogger(__name__)
 
 
 class LLMFactory:
-    """Centralized factory for LLM instance creation"""
+    """Centralized factory for LLM instance creation with multi-provider support"""
 
     @staticmethod
-    def create_planner_llm() -> ChatOpenAI:
+    def _create_llm(model: str, temperature: float, max_tokens: int,
+                   api_key: Optional[str] = None, base_url: Optional[str] = None) -> BaseChatModel:
+        """Create LLM instance based on configured provider"""
+        config = get_config()
+        provider = config.llm_provider.lower()
+
+        if provider == "openai":
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=api_key or config.openai_api_key,
+                base_url=base_url
+            )
+        elif provider == "ollama":
+            # Ollama uses OpenAI-compatible API
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=config.ollama_api_key,
+                base_url=config.ollama_base_url
+            )
+        elif provider in ["vllm", "lmstudio", "custom"]:
+            # Generic OpenAI-compatible API
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=api_key or config.openai_api_key,
+                base_url=base_url or getattr(config, 'llm_base_url', None)
+            )
+        else:
+            logger.warning(f"Unknown LLM provider '{provider}', falling back to OpenAI")
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=api_key or config.openai_api_key,
+                base_url=base_url
+            )
+
+    @staticmethod
+    def create_planner_llm() -> BaseChatModel:
         """Create LLM instance for query planning tasks
 
         Query planning needs:
@@ -30,16 +72,14 @@ class LLMFactory:
         - Cost-effective model
         """
         config = get_config()
-
-        return ChatOpenAI(
+        return LLMFactory._create_llm(
             model=config.planner_llm_model,
             temperature=config.llm_temperature,  # Low temperature for consistency
-            max_tokens=config.llm_max_tokens,
-            api_key=config.openai_api_key or None  # Will use env var if not set
+            max_tokens=config.llm_max_tokens
         )
 
     @staticmethod
-    def create_reasoner_llm() -> ChatOpenAI:
+    def create_reasoner_llm() -> BaseChatModel:
         """Create LLM instance for reasoning and analysis tasks
 
         Reasoning tasks need:
@@ -48,16 +88,14 @@ class LLMFactory:
         - Balanced performance/cost
         """
         config = get_config()
-
-        return ChatOpenAI(
+        return LLMFactory._create_llm(
             model=config.reasoner_llm_model,
             temperature=config.llm_temperature,
-            max_tokens=config.llm_max_tokens,
-            api_key=config.openai_api_key or None
+            max_tokens=config.llm_max_tokens
         )
 
     @staticmethod
-    def create_answerer_llm() -> ChatOpenAI:
+    def create_answerer_llm() -> BaseChatModel:
         """Create LLM instance for final answer generation
 
         Answer generation needs:
@@ -66,16 +104,14 @@ class LLMFactory:
         - Slightly higher creativity for better UX
         """
         config = get_config()
-
-        return ChatOpenAI(
+        return LLMFactory._create_llm(
             model=config.answerer_llm_model,
             temperature=config.answerer_temperature,  # Slightly higher for natural responses
-            max_tokens=config.llm_max_tokens * 2,  # Answers can be longer
-            api_key=config.openai_api_key or None
+            max_tokens=config.llm_max_tokens * 2  # Answers can be longer
         )
 
     @staticmethod
-    def create_query_parser_llm() -> ChatOpenAI:
+    def create_query_parser_llm() -> BaseChatModel:
         """Create LLM instance for structured query parsing
 
         Query parsing needs:
@@ -84,25 +120,21 @@ class LLMFactory:
         - High precision in JSON generation
         """
         config = get_config()
-
-        return ChatOpenAI(
+        return LLMFactory._create_llm(
             model=config.query_parser_llm_model,
             temperature=config.query_parser_temperature,  # Very low for consistent parsing
-            max_tokens=config.llm_max_tokens,
-            api_key=config.openai_api_key or None
+            max_tokens=config.llm_max_tokens
         )
 
     @staticmethod
     def create_default_llm(model: Optional[str] = None,
-                          temperature: Optional[float] = None) -> ChatOpenAI:
+                          temperature: Optional[float] = None) -> BaseChatModel:
         """Create default LLM instance with global settings"""
         config = get_config()
-
-        return ChatOpenAI(
+        return LLMFactory._create_llm(
             model=model or config.llm_model,
             temperature=temperature or config.llm_temperature,
-            max_tokens=config.llm_max_tokens,
-            api_key=config.openai_api_key or None
+            max_tokens=config.llm_max_tokens
         )
 
     @staticmethod
@@ -170,23 +202,23 @@ class LLMFactory:
 
 
 # Convenience functions for backward compatibility
-def create_planner_llm() -> ChatOpenAI:
+def create_planner_llm() -> BaseChatModel:
     """Convenience function for creating planner LLM"""
     return LLMFactory.create_planner_llm()
 
-def create_reasoner_llm() -> ChatOpenAI:
+def create_reasoner_llm() -> BaseChatModel:
     """Convenience function for creating reasoner LLM"""
     return LLMFactory.create_reasoner_llm()
 
-def create_answerer_llm() -> ChatOpenAI:
+def create_answerer_llm() -> BaseChatModel:
     """Convenience function for creating answerer LLM"""
     return LLMFactory.create_answerer_llm()
 
-def create_query_parser_llm() -> ChatOpenAI:
+def create_query_parser_llm() -> BaseChatModel:
     """Convenience function for creating query parser LLM"""
     return LLMFactory.create_query_parser_llm()
 
 def create_default_llm(model: Optional[str] = None,
-                      temperature: Optional[float] = None) -> ChatOpenAI:
+                      temperature: Optional[float] = None) -> BaseChatModel:
     """Convenience function for creating default LLM"""
     return LLMFactory.create_default_llm(model, temperature)
