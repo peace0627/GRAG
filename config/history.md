@@ -42,7 +42,7 @@
 **執行內容**:
 - 評估現有前端架構的用戶體驗問題
 - 比較多種前端技術選項的適用性
-- 決定放棄Streamlit，改用React + Next.js + TypeScript架構
+- 決定放棄Streamlit，改用React + Next.js架構
 - 更新所有專案文檔以反映新架構決策
 - 制定詳細的React前端實施計劃
 
@@ -101,7 +101,58 @@
 - `GET /health` - 基礎健康檢查
 - 文件管理端點保持不變
 
+### 2025-12-11: 實現分離式資料庫狀態監控前端介面
+**執行內容**:
+- 修改FileUpload組件，在上傳進度中分離顯示Neo4j和Supabase的存儲狀態
+- 用戶可以清楚看到每個資料庫的處理狀態和錯誤信息
+- 新增ServiceStatus組件，提供實時系統健康監控
+- 實現文件選擇按鈕的點擊事件修復
+- 修復文件刪除功能，解決Supabase表不存在的問題
+
+**變更檔案**:
+- `frontend/src/components/FileUpload.tsx` (分離資料庫狀態顯示)
+- `frontend/src/components/ServiceStatus.tsx` (新建 - 系統狀態監控)
+- `frontend/src/app/page.tsx` (添加系統狀態分頁)
+- `infrastructure/supabase/supabase-setup.sql` (添加pgvector擴展)
+- `grag/core/database_services.py` (修復list_documents語法錯誤)
+- `grag/ingestion/indexing/ingestion_service.py` (修復import路徑)
+- `grag/api/app.py` (修復get_database_manager調用)
+
+**技術實現**:
+- **分離顯示**: Neo4j和Supabase各有獨立的處理步驟
+- **實時狀態**: 每個資料庫的成功/失敗狀態清晰可見
+- **錯誤診斷**: 精確知道哪個資料庫出現問題
+- **系統監控**: 實時檢查Neo4j、Supabase、網路連接狀態
+
+**前端功能**:
+- 文件選擇按鈕正常工作
+- 分離式資料庫狀態顯示 (Neo4j存儲 + Supabase存儲)
+- 系統狀態分頁提供實時健康監控
+- 文件刪除功能正常工作
+- 知識圖譜顯示真實數據
+
+### 2025-12-11: 完整系統測試與文檔更新
+**執行內容**:
+- 執行完整系統測試，驗證所有功能正常工作
+- 更新所有專案文檔以反映當前系統狀態
+- 驗證前端+後端集成，確認API調用正常
+- 更新README.md，progress.md，todos.md等文檔
+
+**變更檔案**:
+- `README.md` (更新專案狀態和功能描述)
+- `config/progress.md` (更新進度追蹤)
+- `config/todos.md` (更新任務完成狀態)
+- `config/history.md` (記錄最新變更)
+
+**測試結果**:
+- ✅ 後端API服務正常運行
+- ✅ 前端介面編譯通過
+- ✅ 文件上傳功能正常
+- ✅ 文件刪除功能正常
+- ✅ 系統狀態監控正常
+- ✅ 分離式資料庫狀態顯示正常
+
 ---
 
-*歷史記錄版本: 1.2*
+*歷史記錄版本: 1.3*
 *最後更新日期: 2025-12-11*

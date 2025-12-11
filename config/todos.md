@@ -15,6 +15,8 @@
 - [x] 實現簡化RAG查詢端點 (`POST /query/simple`)
 - [x] 實現懶加載Agent實例管理
 - [x] 配置完整的錯誤處理和響應格式化
+- [x] 修復文件上傳和刪除功能
+- [x] 修復資料庫連線和import錯誤
 
 ## 階段8: 前端介面 - React + Next.js 架構 🔄 架構規劃完成
 **架構決策**: 放棄Streamlit，改用React + Next.js + TypeScript
