@@ -97,22 +97,26 @@
 - **信心評分**: 量化0.0-1.0信心度量
 - **測試覆蓋**: 單元測試+集成測試通過
 
-### 階段 8: 前端介面 (Frontend Interface) - ✅ 完成 (100% 前端重構後)
-- [x] **模塊化架構重構** (NEW): 完成前端完整重構
-  - [x] 組件化設計: ConfigSidebar, FileUpload, ProcessingDisplay
-  - [x] 服務化封裝: SystemCheckService, EmbeddingService
-  - [x] 工具函數提取: helpers, formatting, constants
-  - [x] 視圖分離: document_processing, database_management
-- [x] 用戶查詢介面 (模塊化設計)
-- [x] 檔案上傳 (PDF, images) - 已實作批量上傳功能
-- [x] 系統狀態檢查和顯示
-- [x] 配置管理介面 (側邊欄)
-- [ ] Knowledge Area 選擇器 - 待實作
-- [ ] 時間範圍篩選 (temporal filter) - 待實作
-- [ ] Agent reasoning trace 展示 - 待實作 (需階段7 API完成)
-- [ ] Evidence 展示和 VLM region 高亮 - 待實作
-- [ ] 可視化組件 (圖譜 viewer, Chunk viewer, VLM region viewer) - 待實作
-- [ ] Session state 管理 - 待實作
+### 階段 8: 前端介面 (Frontend Interface) - ❌ 未開始 (React + Next.js 架構規劃)
+**架構決策**: 放棄Streamlit，改用React + Next.js + TypeScript架構
+**理由**: Streamlit重新執行問題嚴重影響用戶體驗，React生態更適合複雜的GraphRAG介面
+
+**計劃功能**:
+- [ ] **應用框架設置**: Next.js 14+ + React 18+ + TypeScript
+- [ ] **設計系統**: shadcn/ui + Tailwind CSS + 深色模式
+- [ ] **API集成**: 自動生成TypeScript類型 + TanStack Query
+- [ ] **查詢介面**: 多語言輸入 + 實時建議 + 歷史記錄
+- [ ] **文件上傳**: 拖拽上傳 + 批量處理 + 進度指示器
+- [ ] **Agent Trace**: 步驟化展示 + 實時更新 + 交互展開
+- [ ] **多模態展示**: Markdown渲染 + VLM高亮 + 證據追溯
+- [ ] **圖譜視覺化**: Cytoscape.js + Neo4j集成 + 交互探索
+- [ ] **系統監控**: 實時狀態 + WebSocket更新 + 錯誤恢復
+
+**預期優勢**:
+- 組件化架構支持複雜UI
+- 類型安全確保API調用可靠
+- 現代開發體驗和性能優化
+- 豐富的視覺化生態系統
 
 ---
 

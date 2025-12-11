@@ -4,6 +4,9 @@
 -- ⚠️ 注意：向量維度 384 是硬編碼的，與 .env 中的 EMBEDDING_DIMENSION 設定無關！
 -- 如果需要修改向量維度，請直接更改下方的 vector(384) 並重建表
 
+-- 0. 啟用 pgvector 擴展 (必須先執行)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- 1. 創建vectors表 (如果不存在)
 CREATE TABLE IF NOT EXISTS public.vectors (
     vector_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

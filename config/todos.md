@@ -16,6 +16,21 @@
 - [x] 實現懶加載Agent實例管理
 - [x] 配置完整的錯誤處理和響應格式化
 
+## 階段8: 前端介面 - React + Next.js 架構 🔄 架構規劃完成
+**架構決策**: 放棄Streamlit，改用React + Next.js + TypeScript
+**理由**: Streamlit重新執行問題嚴重影響用戶體驗，React生態更適合複雜的GraphRAG介面
+
+- [x] 評估前端技術選項 (完成比較分析)
+- [x] 設置React + Next.js專案結構
+- [x] 實現API客戶端和類型定義
+- [x] 創建基礎UI組件 (shadcn/ui + Tailwind)
+- [x] 實現查詢介面 (多語言輸入 + 實時建議)
+- [x] 實現文件上傳功能 (拖拽上傳 + 進度指示器)
+- [ ] 添加Agent reasoning trace展示 (準備實現)
+- [ ] 實現圖譜視覺化 (Cytoscape.js) (準備實現)
+- [ ] 實現VLM region高亮和多模態展示 (準備實現)
+- [ ] 添加系統監控和實時狀態 (準備實現)
+
 ## 🎉 階段7里程碑：Agentic RAG API整合完成
 **實現功能**:
 - ✅ **完整RAG查詢**: POST /query - AgenticRAGAgent完整Pipeline
@@ -33,6 +48,13 @@
 - [x] 更新 `.env.example` 添加完整LLM配置範例
 
 ## 專案維護任務
+- [x] 更新所有專案文檔以反映React + Next.js架構決策
+  - [x] config/plan.md - 更新階段8詳細計劃
+  - [x] config/progress.md - 修正前端狀態描述
+  - [x] config/todos.md - 更新任務清單
+  - [x] config/history.md - 記錄架構決策
+  - [x] README.md - 更新專案概述
+  - [x] docs/architecture/README.md - 更新架構說明
 - [ ] 檢查 requirements.txt 無未使用套件
 - [ ] 驗證所有配置都在 .env 管理
 - [ ] 確保程式結構使用 Pydantic 控制

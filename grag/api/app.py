@@ -293,19 +293,20 @@ async def list_documents(limit: int = 50, offset: int = 0):
     """獲取已處理的文檔列表"""
     try:
         db_manager = get_database_manager()
-        # 這裡可以實現索引查詢邏輯
-        # 目前返回空的，因為需要修改DatabaseManager
+        await db_manager.initialize()
 
-        # 簡單的模擬回應
+        # Query documents from Neo4j
+        documents = await db_manager.list_documents(limit=limit, offset=offset)
+        await db_manager.close()
+
         return {
             "success": True,
-            "documents": [],
+            "documents": documents["documents"],
             "pagination": {
                 "limit": limit,
                 "offset": offset,
-                "total": 0
-            },
-            "message": "Document listing not yet implemented. Use database tools for now."
+                "total": documents["total"]
+            }
         }
 
     except Exception as e:

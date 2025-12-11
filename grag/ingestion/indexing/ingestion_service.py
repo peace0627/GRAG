@@ -356,7 +356,7 @@ class IngestionService:
                                                    processing_metadata: Optional[Dict[str, Any]] = None):
         """Run embedding and knowledge extraction with enhanced traceability"""
         from datetime import datetime
-        from ..core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
+        from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
 
         processing_metadata = processing_metadata or {}
         processing_start = datetime.now()
@@ -370,7 +370,7 @@ class IngestionService:
             chunk_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,  # Chunks are stored in Neo4j
                 source_id=chunk.get("chunk_id"),
-                document_id=file_id or "unknown",
+                document_id=file_id if file_id else uuid4(),
                 document_path=str(file_path) if file_path else "unknown",
                 page_number=chunk.get("metadata", {}).get("page", 1),
                 chunk_order=chunk.get("order", i),
@@ -400,10 +400,18 @@ class IngestionService:
         # Enhance knowledge data with traceability
         enhanced_entities = []
         for entity in knowledge_data.get("entities", []):
+            # Ensure source_id is a valid UUID
+            source_id = entity.get("entity_id")
+            if not isinstance(source_id, UUID):
+                try:
+                    source_id = UUID(source_id)
+                except (ValueError, TypeError):
+                    source_id = uuid4()
+
             entity_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,
-                source_id=entity.get("entity_id"),
-                document_id=file_id or "unknown",
+                source_id=source_id,
+                document_id=file_id if file_id else uuid4(),
                 document_path=str(file_path) if file_path else "unknown",
                 processing_timestamp=datetime.now(),
                 processing_pipeline=["knowledge_extraction", "ner"],
@@ -428,10 +436,17 @@ class IngestionService:
         # Enhance relations with traceability
         enhanced_relations = []
         for relation in knowledge_data.get("relations", []):
+            # Ensure source_id is a valid UUID
+            source_id_str = f"{relation.get('source_id')}_{relation.get('target_id')}"
+            try:
+                source_id = UUID(source_id_str)
+            except (ValueError, TypeError):
+                source_id = uuid4()
+
             relation_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,
-                source_id=f"{relation.get('source_id')}_{relation.get('target_id')}",
-                document_id=file_id or "unknown",
+                source_id=source_id,
+                document_id=file_id if file_id else uuid4(),
                 document_path=str(file_path) if file_path else "unknown",
                 processing_timestamp=datetime.now(),
                 processing_pipeline=["knowledge_extraction", "relation_extraction"],
@@ -455,10 +470,18 @@ class IngestionService:
         # Enhance visual facts with traceability
         enhanced_visual_facts = []
         for fact in visual_facts:
+            # Ensure source_id is a valid UUID
+            source_id = fact.get("fact_id", f"visual_fact_{len(enhanced_visual_facts)}")
+            if not isinstance(source_id, UUID):
+                try:
+                    source_id = UUID(source_id)
+                except (ValueError, TypeError):
+                    source_id = uuid4()
+
             fact_traceability = TraceabilityInfo(
                 source_type=SourceType.SUPABASE,  # Visual facts come from VLM/vector processing
-                source_id=fact.get("fact_id", f"visual_fact_{len(enhanced_visual_facts)}"),
-                document_id=file_id or "unknown",
+                source_id=source_id,
+                document_id=file_id if file_id else uuid4(),
                 document_path=str(file_path) if file_path else "unknown",
                 page_number=fact.get("page", 1),
                 processing_timestamp=datetime.now(),
@@ -618,7 +641,7 @@ class IngestionService:
     async def _ingest_pgvector(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Ingest vector data into pgvector using async methods"""
         try:
-            from grag.core.pgvector_schemas import VectorInsert
+            from grag.core.schemas.pgvector_schemas import VectorInsert
             from uuid import uuid4
 
             vectors_ingested = 0

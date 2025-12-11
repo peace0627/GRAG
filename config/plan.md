@@ -73,21 +73,39 @@
 3. Audit log 實現 (Plan, tools, evidence)
 4. 錯誤處理和回溯邏輯
 
-### 階段 8: 前端介面 (Frontend Interface)
-1. 應用框架
-2. 用戶查詢介面
-   - 多語支援
-   - 檔案上傳 (PDF, images)
-   - Knowledge Area 選擇器
-   - 時間範圍篩選 (temporal filter)
-3. 結果展示
-   - Agent reasoning trace
-   - Evidence 展示和 VLM region 高亮
-4. 可視化組件
-   - 圖譜 viewer (Neo4j subgraph)
-   - Chunk viewer
-   - VLM region viewer
-5. Session state 管理
+### 階段 8: 前端介面 (Frontend Interface) - React + Next.js 架構
+1. 應用框架設置
+   - Next.js 14+ + React 18+ + TypeScript
+   - shadcn/ui + Tailwind CSS 設計系統
+   - 響應式設計和深色模式支持
+2. API集成和類型安全
+   - 自動生成TypeScript類型 (從FastAPI schema)
+   - TanStack Query 服務端狀態管理
+   - WebSocket 實時更新支持
+3. 用戶查詢介面
+   - 多語言輸入框 (中英文+擴展)
+   - 實時查詢建議和歷史記錄
+   - 查詢類型選擇器和參數配置
+4. 文件上傳系統
+   - 拖拽上傳介面 (PDF, JPG, PNG)
+   - 批量處理和進度指示器
+   - 文件預覽和元數據展示
+5. Agent Reasoning Trace 視覺化
+   - 步驟化處理流程展示
+   - 實時更新和交互式展開
+   - 錯誤處理和恢復機制
+6. 多模態結果展示
+   - Markdown渲染和語法高亮
+   - 證據鏈接和來源追溯
+   - VLM region高亮和圖像註解
+7. 圖譜視覺化組件
+   - Cytoscape.js 圖譜渲染
+   - Neo4j數據集成
+   - 交互式節點和關係探索
+8. 系統監控和狀態管理
+   - 實時系統健康狀態
+   - 處理進度追蹤
+   - 錯誤恢復和用戶反饋
 
 ### 階段 9: 測試與評估 (Testing & Evaluation)
 1. 單元測試和集成測試

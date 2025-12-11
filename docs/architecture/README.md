@@ -212,9 +212,13 @@ class ConfigManager:
 
 ### 🔮 未來擴展計劃
 
-1. **Agentic RAG 核心**: 實現自主查詢規劃和推理
-2. **先進檢索算法**: 實現混合檢索和重新排序
-3. **前端界面**: React/Vue.js 現代化UI
+1. **前端界面**: React + Next.js + TypeScript 現代化UI
+   - **技術棧**: Next.js 14+ + React 18 + TypeScript + shadcn/ui
+   - **核心功能**: Agentic RAG查詢介面、多模態文件上傳、實時處理狀態
+   - **視覺化**: Cytoscape.js圖譜渲染、D3.js自定義圖表、VLM區域高亮
+   - **狀態管理**: TanStack Query + Zustand + WebSocket實時更新
+2. **Agentic RAG 核心**: 實現自主查詢規劃和推理
+3. **先進檢索算法**: 實現混合檢索和重新排序
 4. **分布式部署**: Kubernetes 支持
 5. **監控和觀測**: Prometheus + Grafana
 6. **多租戶支持**: 用戶隔離和權限管理

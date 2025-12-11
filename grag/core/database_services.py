@@ -6,7 +6,7 @@ for Neo4j and Supabase pgvector databases.
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Dict, Any
 from uuid import UUID
 
 from neo4j import AsyncGraphDatabase
@@ -161,10 +161,50 @@ class DatabaseManager:
             return results
 
         except Exception as e:
-            error_msg = f"Batch deletion critical error: {str(e)}"
-            logger.error(error_msg)
-            results["errors"].append(error_msg)
+            logger.error(f"Batch deletion critical error: {str(e)}")
+            results["errors"].append(f"Critical error: {str(e)}")
             return results
+
+    async def list_documents(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        """List documents from Neo4j with pagination"""
+        try:
+            query = """
+            MATCH (d:Document)
+            OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+            WITH d, count(c) as chunk_count
+            RETURN d.document_id as document_id,
+                   d.title as title,
+                   d.source_path as source_path,
+                   d.created_at as created_at,
+                   d.updated_at as updated_at,
+                   chunk_count
+            ORDER BY d.created_at DESC
+            SKIP $offset
+            LIMIT $limit
+            """
+
+            async with self.neo4j_session() as session:
+                results = await session.run(query, offset=offset, limit=limit)
+                records = await results.fetch(limit)
+
+                documents = []
+                for record in records:
+                    doc = {
+                        "document_id": str(record["document_id"]),
+                        "title": record["title"],
+                        "source_path": record["source_path"],
+                        "created_at": record["created_at"].isoformat() if record["created_at"] else None,
+                        "updated_at": record["updated_at"].isoformat() if record["updated_at"] else None,
+                        "chunk_count": record["chunk_count"] or 0,
+                        "file_size": 0,
+                        "processing_status": "completed"
+                    }
+                    documents.append(doc)
+
+                return {"documents": documents, "total": len(documents)}
+        except Exception as e:
+            logger.error(f"Failed to list documents: {e}")
+            return {"documents": [], "total": 0, "error": str(e)}
 
     async def delete_chunk_cascade(self, chunk_id: UUID) -> bool:
         """Cascade delete chunk from both databases
