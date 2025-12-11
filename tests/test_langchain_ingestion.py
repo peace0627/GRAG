@@ -13,6 +13,7 @@ sys.path.insert(0, str(project_root))
 import asyncio
 import tempfile
 import logging
+import pytest
 
 from grag.ingestion.indexing.ingestion_service import IngestionService
 from grag.ingestion.langchain_loader import LangChainDocumentLoader, DocumentProcessingStrategy, StructuredTextFallback
@@ -22,6 +23,7 @@ from grag.ingestion.indexing.embedding_service import EmbeddingService
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
+@pytest.mark.asyncio
 async def test_langchain_components():
     """Test individual LangChain components without database dependencies"""
 
@@ -126,11 +128,5 @@ async def test_langchain_components():
             test_file_path.unlink()
 
 
-async def main():
-    """Main test runner"""
-    success = await test_langchain_components()
-    sys.exit(0 if success else 1)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# Note: This file is now a pytest test module
+# Run with: pytest tests/test_langchain_ingestion.py -v

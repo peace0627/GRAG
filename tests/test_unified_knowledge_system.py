@@ -102,7 +102,7 @@ class TestSmartRouter:
             constraints=QueryConstraints(),
             reasoning_requirements=ReasoningRequirements(),
             response_format=ResponseFormat(),
-            parsing_timestamp=datetime.now()
+            parsing_timestamp=datetime.now().isoformat()
         )
 
         pattern = router._determine_routing_pattern(visual_query)

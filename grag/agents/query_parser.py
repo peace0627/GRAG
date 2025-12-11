@@ -115,9 +115,10 @@ JSON結構必須包含：
         start_time = time.time()
 
         try:
-            # Detect language if not provided
+            # Use provided language or default to multilingual
+            # Modern LLMs can handle multiple languages without explicit detection
             if not language:
-                language = self._detect_language(query)
+                language = "multilingual"
 
             # Create parsing prompt
             user_prompt = f"""

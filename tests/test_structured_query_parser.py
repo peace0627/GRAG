@@ -30,6 +30,7 @@ class TestStructuredQueryParser:
     @pytest.fixture
     def parser(self, mock_llm):
         """Create parser with mock LLM"""
+        mock_llm.model_name = "test_model"  # Set model_name to avoid validation error
         return StructuredQueryParser(llm=mock_llm)
 
     @pytest.mark.asyncio
@@ -69,7 +70,7 @@ class TestStructuredQueryParser:
         # Assertions
         assert result.success is True
         assert result.structured_query is not None
-        assert result.structured_query.language == "zh"
+        assert result.structured_query.language == "multilingual"  # Now defaults to multilingual
         assert result.structured_query.query_type == QueryType.VISUAL
         assert result.structured_query.intent.primary_action == PrimaryAction.FIND
         assert result.structured_query.intent.target_metric == "sales"
@@ -141,7 +142,7 @@ class TestStructuredQueryParser:
         result = await parser.parse_query("What are the sales by region?")
 
         assert result.success is True
-        assert result.structured_query.language == "en"
+        assert result.structured_query.language == "multilingual"  # Now defaults to multilingual
         assert result.structured_query.query_type == QueryType.FACTUAL
 
     @pytest.mark.asyncio
@@ -161,13 +162,46 @@ class TestStructuredQueryParser:
         assert result.raw_llm_response == mock_response.content
 
     @pytest.mark.asyncio
-    async def test_language_detection(self, parser):
-        """Test language detection functionality"""
+    async def test_multilingual_parsing(self, parser, mock_llm):
+        """Test LLM's ability to handle multilingual queries"""
 
-        # Chinese detection
-        assert parser._detect_language("圖表顯示銷售數據") == "zh"
-        assert parser._detect_language("This is English text") == "en"
-        assert parser._detect_language("混合Chinese and English文本") == "zh"  # More Chinese chars
+        # Test mixed Chinese-English query
+        mock_response = MagicMock()
+        mock_response.content = '''
+        {
+          "query_type": "visual",
+          "intent": {
+            "primary_action": "find",
+            "target_metric": "sales",
+            "group_by": "month",
+            "visualization_preferred": true
+          },
+          "constraints": {
+            "must_include": ["monthly_data"]
+          },
+          "reasoning_requirements": {
+            "needs_comparison": true,
+            "complexity_level": "medium"
+          },
+          "response_format": {
+            "include_evidence": true
+          }
+        }
+        '''
+        mock_llm.ainvoke.return_value = mock_response
+
+        # Test mixed Chinese-English query
+        result = await parser.parse_query("混合Chinese and English文本 - show sales chart")
+
+        assert result.success is True
+        assert result.structured_query.language == "multilingual"
+        assert result.structured_query.query_type == QueryType.VISUAL
+        assert result.structured_query.intent.primary_action == PrimaryAction.FIND
+
+        # Verify the prompt included multilingual context
+        call_args = mock_llm.ainvoke.call_args
+        prompt = call_args[0][0][1].content  # Second message content
+        assert "multilingual" in prompt
 
     def test_fallback_parser(self):
         """Test fallback parser functionality"""
