@@ -1,7 +1,7 @@
 # GraphRAG + LLM + VLM 驅動的高階 Agentic RAG 專案
 
 ## 🧭 專案目標
-建立一個整合 **知識圖譜**、**VLM 模型用於多模態辨識原始檔成為markdown（例如 Qwen2VL）** 與 **高階 Agentic RAG** 系統（LLM問答或者生成markdown文件），使 Agent 能夠自主規劃、多步推理、跨模態（文本與視覺）查詢並回答基於動態知識圖譜的複雜問題。
+建立一個整合 **知識圖譜**、**VLM 模型用於多模態辨識原始檔成為markdown（例如 Qwen3VL）** 與 **高階 Agentic RAG** 系統（LLM問答或者生成markdown文件），使 Agent 能夠自主規劃、多步推理、跨模態（文本與視覺）查詢並回答基於動態知識圖譜的複雜問題。
 
 系統必須支援：
 - 知識區隔離（Knowledge Area Isolation）
@@ -31,7 +31,7 @@ FastAPI/GraphQL
               │                                         │
               ▼                                         ▼
   (A1) VLM Parsing                            (A2) Text Chunking
-    Qwen2VL / OCR / Chart Parser                   LlamaIndex
+    Qwen3VL / OCR / Chart Parser                   LlamaIndex
               │                                         │
               ▼                                         ▼
       ┌──────────────────┐                    ┌──────────────────┐
@@ -134,14 +134,15 @@ User Query → LangGraph Planner
                 Backend API (FastAPI/GraphQL)
                               │
                               ▼
-                   Frontend (Streamlit Dashboard)
+                   Frontend ( Dashboard)
 
 ---
 
 ## 🧱 元件與職責說明（含新增 VLM 層）
 
-### 1️⃣ VLM / Qwen2.5VL 層（**文件視覺處理**）
+### 1️⃣ VLM 層（**文件視覺處理**）
 **功能**：
+- Query時，不管什麼語言，使用LLM產生能與資料庫互動的JSON標準輸出
 - 處理原始文件（PDF 掃描、JPG、PNG、截圖、表格、圖表）。
 - 執行高品質 OCR、表格識別（表格到 CSV）、圖表解析（ex. 曲線、條狀圖數據點萃取）。
 - 產生多尺度文本描述：短摘要 + 詳細視覺事實清單（包括 bounding boxes/region id）。
@@ -309,7 +310,7 @@ py2neo>=2021.2.3                  # optional for direct Neo4j ops
 ---
 
 ## 最後提醒
-- 若要將 Qwen2VL 或其他 VLM 模型部署於內部（on-prem / private cloud），請特別注意運算成本、GPU 設備、以及資料隱私（敏感文件處理時的 log 與快取政策）。
+- 若要將 Qwen3VL 或其他 VLM 模型部署於內部（on-prem / private cloud），請特別注意運算成本、GPU 設備、以及資料隱私（敏感文件處理時的 log 與快取政策）。
 - 在系統早期，建議先搭建一個小型標註集（含掃描件 + 人工標註的表格/圖表），用來迭代 VLM 的解析 prompt 與後處理規則。
 
 ---

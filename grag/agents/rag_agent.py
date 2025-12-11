@@ -6,7 +6,7 @@ Agentic RAG pipeline from query planning to final answer generation.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from langchain_core.messages import SystemMessage, HumanMessage

@@ -48,8 +48,8 @@ build-backend = "hatchling.build"
 packages = ["grag"]
 
 [project.scripts]
-grag = "grag.cli:main"
-grag-cli = "grag.cli:main"
+grag = "grag.cli:sync_main"
+grag-cli = "grag.cli:sync_main"
 grag-api = "grag.api.app:main"
 
 [tool.ruff]

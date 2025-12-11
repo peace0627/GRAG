@@ -61,13 +61,25 @@ class QueryPlanner:
         # Execute planning workflow
         final_state = await self.graph.ainvoke(initial_state)
 
+        # Handle different return types from LangGraph
+        if isinstance(final_state, dict):
+            # LangGraph returned a dict
+            query_type = final_state.get('query_type', QueryType.FACTUAL)
+            current_plan = final_state.get('current_plan', [])
+            reasoning_context = final_state.get('context', {})
+        else:
+            # LangGraph returned a QueryState object
+            query_type = final_state.query_type
+            current_plan = final_state.current_plan
+            reasoning_context = final_state.context
+
         # Convert to output format
         return PlannerOutput(
-            query_type=final_state.query_type,
-            execution_plan=final_state.current_plan,
-            estimated_complexity=self._calculate_complexity(final_state.current_plan),
+            query_type=query_type,
+            execution_plan=current_plan,
+            estimated_complexity=self._calculate_complexity(current_plan),
             reasoning=self._generate_reasoning(final_state),
-            suggested_tools=[step.tool_type for step in final_state.current_plan]
+            suggested_tools=[step.tool_type for step in current_plan]
         )
 
     async def _analyze_query(self, state: QueryState) -> QueryState:
@@ -293,18 +305,25 @@ class QueryPlanner:
 
         return min(base_complexity + tool_complexity, 1.0)
 
-    def _generate_reasoning(self, state: QueryState) -> str:
+    def _generate_reasoning(self, state) -> str:
         """Generate human-readable reasoning for the plan"""
-        query_type = state.query_type
-        plan = state.current_plan
+        # Handle both dict and QueryState inputs
+        if isinstance(state, dict):
+            query_type = state.get('query_type', QueryType.FACTUAL)
+            plan = state.get('current_plan', [])
+            context = state.get('context', {})
+        else:
+            query_type = state.query_type
+            plan = state.current_plan
+            context = state.context
 
         reasoning_parts = [
-            f"Query classified as {query_type.value} type.",
+            f"Query classified as {query_type.value if hasattr(query_type, 'value') else query_type} type.",
             f"Generated {len(plan)} execution steps."
         ]
 
-        if state.context.get("warnings"):
-            reasoning_parts.append(f"Warnings: {state.context['warnings']}")
+        if context.get("warnings"):
+            reasoning_parts.append(f"Warnings: {context['warnings']}")
 
         return " ".join(reasoning_parts)
 

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # Custom API endpoint for OpenAI-compatible services
     openai_api_key: str = ""  # Will be read from OPENAI_API_KEY env var
 
+    # VLM Configuration (Vision Language Models)
+    vlm_openai_api_key: str = ""  # Will be read from VLM_OPENAI_API_KEY env var
+
     # Agent-specific LLM configurations
     planner_llm_model: str = "gpt-4o-mini"  # Query planning - needs precision
     reasoner_llm_model: str = "gpt-4o-mini"  # Reasoning tasks - needs analysis
@@ -52,6 +55,7 @@ class Settings(BaseSettings):
 
     # Note: Qwen2VL cloud service has been removed - using local Ollama instead
     # for better privacy, cost control, and performance
+    qwen2vl_base_url: str = ""  # Qwen2VL API endpoint URL
     qwen2vl_api_key: str = ""  # Kept for backward compatibility with app.py checks
 
     # === Application Configuration ===

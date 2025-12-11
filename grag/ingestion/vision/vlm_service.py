@@ -195,9 +195,20 @@ class VLMService:
         except Exception as e:
             logger.warning(f"Local Ollama service not available: {e}")
 
-        # Priority 3: OpenAI API
-        if settings.openai_api_key:
+        # Priority 3: OpenAI API (VLM specific)
+        if settings.vlm_openai_api_key:
             logger.info("Loading OpenAI VLM client")
+            try:
+                return VLMClient(
+                    api_type="openai",
+                    base_url="https://api.openai.com/v1",
+                    api_key=settings.vlm_openai_api_key
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create OpenAI VLM client: {e}")
+        elif settings.openai_api_key:
+            # Fallback: use LLM API key if VLM specific key not set
+            logger.info("Using LLM OpenAI API key for VLM (fallback)")
             try:
                 return VLMClient(
                     api_type="openai",
@@ -205,7 +216,7 @@ class VLMService:
                     api_key=settings.openai_api_key
                 )
             except Exception as e:
-                logger.warning(f"Failed to create OpenAI VLM client: {e}")
+                logger.warning(f"Failed to create OpenAI VLM client with fallback key: {e}")
 
         # Note: Qwen2VL cloud service removed - using local Ollama only
         # for better privacy, cost control, and performance

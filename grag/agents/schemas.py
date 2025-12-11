@@ -68,7 +68,7 @@ class QueryState(BaseModel):
     """State maintained throughout query execution"""
     query_id: str = Field(..., description="Unique query identifier")
     original_query: str = Field(..., description="Original user query")
-    query_type: QueryType = Field(..., description="Classified query type")
+    query_type: QueryType = Field(default=QueryType.FACTUAL, description="Classified query type")
     current_plan: List[PlanStep] = Field(default_factory=list, description="Current execution plan")
     executed_steps: List[str] = Field(default_factory=list, description="Completed step IDs")
     collected_evidence: List[Evidence] = Field(default_factory=list, description="All collected evidence")

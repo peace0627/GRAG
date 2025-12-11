@@ -7,7 +7,7 @@ evidence, and relationships across the entire GraphRAG system.
 
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional, Literal, Union
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import datetime
 from enum import Enum
 
@@ -81,7 +81,7 @@ class TraceabilityInfo(BaseModel):
 class Relationship(BaseModel):
     """Relationship between knowledge units"""
 
-    relationship_id: UUID = Field(default_factory=UUID.uuid4, description="Unique relationship identifier")
+    relationship_id: UUID = Field(default_factory=uuid4, description="Unique relationship identifier")
     source_unit_id: UUID = Field(..., description="Source knowledge unit ID")
     target_unit_id: UUID = Field(..., description="Target knowledge unit ID")
 
@@ -106,7 +106,7 @@ class KnowledgeUnit(BaseModel):
     """Unified knowledge unit representation"""
 
     # Core identification
-    id: UUID = Field(default_factory=UUID.uuid4, description="Unique knowledge unit identifier")
+    id: UUID = Field(default_factory=uuid4, description="Unique knowledge unit identifier")
     knowledge_area_id: str = Field(..., description="Knowledge area this belongs to")
 
     # Content
@@ -237,7 +237,7 @@ class UnifiedEvidence(BaseModel):
 class KnowledgeGraph(BaseModel):
     """Knowledge graph representation"""
 
-    graph_id: UUID = Field(default_factory=UUID.uuid4)
+    graph_id: UUID = Field(default_factory=uuid4)
     name: str = Field(..., description="Graph name")
     description: Optional[str] = Field(None, description="Graph description")
 

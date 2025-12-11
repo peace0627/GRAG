@@ -38,7 +38,7 @@ class GraphRAGCLI:
             )
             await self.db_manager.initialize()
 
-    def health(self, args):
+    async def health(self, args):
         """檢查系統健康狀態"""
         print("=== 系統健康檢查 ===")
 
@@ -131,7 +131,7 @@ class GraphRAGCLI:
             print(f"錯誤: {str(e)}")
             return 1
 
-    def stats(self, args):
+    async def stats(self, args):
         """顯示資料庫統計"""
         print("=== 資料庫統計 ===")
         print("統計功能即將實現，目前使用Neo4j Browser查看詳細統計")
@@ -165,12 +165,12 @@ async def main():
         upload_parser = subparsers.add_parser('upload', help='上傳並處理文件')
         upload_parser.add_argument('file', help='要處理的文件路徑')
         upload_parser.add_argument('--force-vlm', action='store_true', help='強制使用VLM處理')
-        upload_parser.set_defaults(func=lambda args: asyncio.run(cli.upload(args)))
+        upload_parser.set_defaults(func=cli.upload)
 
         # delete 命令
         delete_parser = subparsers.add_parser('delete', help='删除文檔')
         delete_parser.add_argument('document_id', help='要删除的文檔ID')
-        delete_parser.set_defaults(func=lambda args: asyncio.run(cli.delete(args)))
+        delete_parser.set_defaults(func=cli.delete)
 
         # stats 命令
         stats_parser = subparsers.add_parser('stats', help='顯示資料庫統計')
@@ -184,7 +184,11 @@ async def main():
             return 1
 
         # 執行對應的命令
-        return await args.func(args) if asyncio.iscoroutinefunction(args.func) else args.func(args)
+        result = args.func(args)
+        if asyncio.iscoroutine(result):
+            return await result
+        else:
+            return result
 
     except KeyboardInterrupt:
         print("\n用戶中斷")
