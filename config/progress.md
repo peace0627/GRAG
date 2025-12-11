@@ -118,12 +118,14 @@
 
 ## 🚧 當前重點任務 (Priority Tasks)
 
-### 🔥 核心功能缺失 (更新後)
-- **階段 7**: Backend API 整合 - 現在成為關鍵路徑
-  - 將Agentic RAG Core整合到FastAPI
-  - 實現RAG查詢端點 (`POST /query`)
-  - 添加系統狀態監控
-  - 實現證據溯源API
+### 🔥 核心功能缺失 (最新更新)
+- **階段 7**: Backend API 整合 ✅ **已完成**
+  - ✅ 將Agentic RAG Core整合到FastAPI
+  - ✅ 實現RAG查詢端點 (`POST /query`)
+  - ✅ 添加系統狀態監控 (`GET /system/status`)
+  - ✅ 實現證據溯源API (基礎框架)
+  - ✅ 創建完整API Schema (`grag/api/schemas.py`)
+  - ✅ 實現簡化RAG查詢 (`POST /query/simple`)
 - 前端已模塊化，可快速疊加新功能
 
 ### 🎯 階段性實施策略

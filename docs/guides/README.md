@@ -25,6 +25,8 @@
 
    # 啟動API服務
    uv run grag-api
+   # 或直接啟動
+   uv run uvicorn grag.api.app:app --host 0.0.0.0 --port 8000 --reload
    ```
 
 4. **測試功能**
@@ -34,6 +36,11 @@
 
    # 上傳文檔
    uv run grag upload sample.pdf
+
+   # 測試RAG查詢 (新功能)
+   curl -X POST "http://localhost:8000/query" \
+        -H "Content-Type: application/json" \
+        -d '{"query": "What is GraphRAG?"}'
 
    # 查看API文檔
    # 訪問: http://localhost:8000/docs

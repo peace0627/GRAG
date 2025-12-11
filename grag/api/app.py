@@ -20,6 +20,14 @@ from grag.core.health_service import HealthService
 from grag.core.database_services import DatabaseManager
 from grag.ingestion.indexing.ingestion_service import IngestionService
 
+# 導入Agent和API Schemas
+from grag.agents.rag_agent import AgenticRAGAgent
+from .schemas import (
+    QueryRequest, QueryResponse, SystemStatusResponse,
+    UploadResponse, BatchUploadResponse, DeleteResponse,
+    StatisticsResponse, SearchRequest, SearchResponse, ErrorResponse
+)
+
 # 創建FastAPI應用
 app = FastAPI(
     title="GraphRAG API",
@@ -38,6 +46,24 @@ app.add_middleware(
 
 # 初始化核心服務
 health_service = HealthService()
+
+# 全域Agent實例 (懶加載)
+_rag_agent: Optional[AgenticRAGAgent] = None
+
+async def get_rag_agent() -> AgenticRAGAgent:
+    """獲取或創建RAG Agent實例"""
+    global _rag_agent
+    if _rag_agent is None:
+        try:
+            _rag_agent = AgenticRAGAgent()
+            # 測試Agent初始化
+            await _rag_agent.get_system_status()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initialize RAG Agent: {str(e)}"
+            )
+    return _rag_agent
 
 def get_database_manager():
     """獲取資料庫管理器實例"""
@@ -325,6 +351,124 @@ async def get_statistics():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
+
+@app.post("/query")
+async def rag_query(request: QueryRequest) -> QueryResponse:
+    """執行Agentic RAG查詢"""
+    try:
+        # 獲取或初始化Agent
+        agent = await get_rag_agent()
+
+        # 執行查詢
+        result = await agent.query(
+            user_query=request.query,
+            context=request.context
+        )
+
+        # 限制返回的evidence數量
+        max_evidence = request.max_evidence or 10
+        if len(result.get("evidence", [])) > max_evidence:
+            result["evidence"] = result["evidence"][:max_evidence]
+
+        # 如果不需要planning信息，移除它
+        if not request.include_planning:
+            result.pop("planning_info", None)
+
+        # 轉換為響應模型
+        return QueryResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 返回錯誤響應
+        return QueryResponse(
+            query_id=f"error_{hash(request.query)}",
+            original_query=request.query,
+            query_type="error",
+            final_answer="",
+            confidence_score=0.0,
+            evidence_count=0,
+            execution_time=0.0,
+            success=False,
+            error=str(e)
+        )
+
+@app.get("/system/status")
+async def get_system_status() -> SystemStatusResponse:
+    """獲取完整的系統狀態，包括Agent狀態"""
+    try:
+        # 基礎健康檢查
+        base_status = health_service.get_system_status()
+
+        # Agent狀態檢查
+        agent_status = None
+        try:
+            agent = await get_rag_agent()
+            agent_status = await agent.get_system_status()
+        except Exception as e:
+            agent_status = {"status": "error", "error": str(e)}
+
+        # 提取services信息
+        services_info = {
+            "langchain": base_status.get("langchain", False),
+            "vlm_configured": base_status.get("vlm_configured", False),
+            "database": base_status.get("database", {}),
+            "embedding_service": base_status.get("embedding_service", False)
+        }
+
+        # 創建響應對象
+        response = SystemStatusResponse(
+            status="operational" if base_status["overall_health"] in ["excellent", "good"] else "degraded",
+            timestamp=base_status["timestamp"],
+            overall_health=base_status["overall_health"],
+            services=services_info,
+            agents=agent_status
+        )
+
+        return response
+
+    except Exception as e:
+        # 調試信息
+        import traceback
+        error_details = f"{str(e)}\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=f"System status check failed: {error_details}")
+
+@app.post("/query/simple")
+async def simple_rag_query(request: QueryRequest) -> QueryResponse:
+    """執行簡化的RAG查詢 (SimpleRAGAgent)"""
+    try:
+        from grag.agents.rag_agent import SimpleRAGAgent
+
+        # 初始化簡化Agent
+        agent = SimpleRAGAgent()
+
+        # 執行查詢
+        result = await agent.query(request.query)
+
+        # 轉換為響應模型
+        return QueryResponse(
+            query_id=result["query_id"],
+            original_query=request.query,
+            query_type="simple",
+            final_answer=result["final_answer"],
+            confidence_score=0.5,  # 簡化Agent沒有信心評分
+            evidence_count=result["evidence_count"],
+            execution_time=result["execution_time"],
+            success=True
+        )
+
+    except Exception as e:
+        return QueryResponse(
+            query_id=f"error_simple_{hash(request.query)}",
+            original_query=request.query,
+            query_type="error",
+            final_answer="",
+            confidence_score=0.0,
+            evidence_count=0,
+            execution_time=0.0,
+            success=False,
+            error=str(e)
+        )
 
 def main():
     """啟動FastAPI服務"""

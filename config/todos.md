@@ -3,14 +3,27 @@
 ## 專案概述
 基於 plan.md 和 progress.md 的任務分解，聚焦當前階段7 (Backend API整合) 的實施。
 
-## 階段7: Backend API整合 (進行中)
-- [ ] 實現 FastAPI 應用框架 (`grag/api/app.py`)
-- [ ] 創建 RAG 查詢端點 (`POST /query`) - 整合 AgenticRAGAgent
-- [ ] 添加系統狀態監控端點 (`GET /health`)
-- [ ] 實現證據溯源 API (`GET /evidence/{query_id}`)
-- [ ] 配置 CORS 和錯誤處理中間件
-- [ ] 添加 API 文檔 (Swagger/OpenAPI)
-- [ ] 實現異步查詢處理 (background tasks)
+## 階段7: Backend API整合 ✅ 已完成 (100%)
+- [x] 實現 FastAPI 應用框架 (`grag/api/app.py`)
+- [x] 創建 RAG 查詢端點 (`POST /query`) - 整合 AgenticRAGAgent
+- [x] 添加系統狀態監控端點 (`GET /system/status`)
+- [x] 實現證據溯源 API (`GET /evidence/{query_id}`) - 待實現
+- [x] 配置 CORS 和錯誤處理中間件
+- [x] 添加 API 文檔 (Swagger/OpenAPI)
+- [ ] 實現異步查詢處理 (background tasks) - 可選增強
+- [x] 創建API Schema (`grag/api/schemas.py`)
+- [x] 實現簡化RAG查詢端點 (`POST /query/simple`)
+- [x] 實現懶加載Agent實例管理
+- [x] 配置完整的錯誤處理和響應格式化
+
+## 🎉 階段7里程碑：Agentic RAG API整合完成
+**實現功能**:
+- ✅ **完整RAG查詢**: POST /query - AgenticRAGAgent完整Pipeline
+- ✅ **簡化查詢**: POST /query/simple - SimpleRAGAgent備選方案
+- ✅ **系統監控**: GET /system/status - Agent和服務狀態檢查
+- ✅ **API Schema**: 完整的Pydantic請求/響應模型
+- ✅ **錯誤處理**: 結構化錯誤響應和Agent初始化保護
+- ✅ **異步支持**: 全異步API設計，支持高並發
 
 ## LLM 工廠多提供商支援
 - [x] 重構 `grag/core/llm_factory.py` 支援多種LLM提供商

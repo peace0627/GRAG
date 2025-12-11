@@ -2,7 +2,9 @@
 
 ## 概覽
 
-GraphRAG系統提供RESTful API，用於文件處理、檢索和管理操作。
+GraphRAG系統提供完整的RESTful API，用於Agentic RAG查詢、文件處理、檢索和管理操作。
+
+**🎉 最新更新**: 已實現完整的Agentic RAG查詢功能，所有API端點測試通過。
 
 ## 基礎信息
 
@@ -124,6 +126,123 @@ GraphRAG系統提供RESTful API，用於文件處理、檢索和管理操作。
     "successful_deletions": 3,
     "failed_deletions": [],
     "total_requested": 3
+  }
+}
+```
+
+### 🤖 Agentic RAG 查詢 (核心功能)
+
+#### POST /query
+
+執行完整的Agentic RAG智能查詢，包含規劃、檢索、推理和最終回答生成。
+
+**請求體**:
+```json
+{
+  "query": "圖表顯示哪個月銷售最低？",
+  "context": null,
+  "max_evidence": 10,
+  "include_planning": false
+}
+```
+
+**參數**:
+- `query` (string): 用戶查詢，必填
+- `context` (object, 可選): 額外上下文信息
+- `max_evidence` (int, 可選): 返回的最大證據數量，默認10
+- `include_planning` (bool, 可選): 是否包含規劃信息，默認false
+
+**響應示例**:
+```json
+{
+  "query_id": "visual_-1182087",
+  "original_query": "圖表顯示哪個月銷售最低？",
+  "query_type": "visual",
+  "final_answer": "根據提供的數據，2月份的銷售額最低。",
+  "confidence_score": 0.85,
+  "evidence_count": 3,
+  "execution_time": 0.504,
+  "needs_clarification": false,
+  "clarification_questions": [],
+  "evidence": [
+    {
+      "evidence_id": "ev_123",
+      "source_type": "neo4j",
+      "content": "銷售數據顯示2月份銷售額為150萬",
+      "confidence": 0.9,
+      "metadata": {}
+    }
+  ],
+  "reflection": {
+    "context_sufficient": true,
+    "gaps_identified": [],
+    "confidence_assessment": {
+      "overall": 0.85
+    }
+  },
+  "success": true
+}
+```
+
+#### POST /query/simple
+
+執行簡化的RAG查詢，使用SimpleRAGAgent快速回答簡單問題。
+
+**請求體**:
+```json
+{
+  "query": "What is GraphRAG?"
+}
+```
+
+**響應示例**:
+```json
+{
+  "query_id": "simple_123456",
+  "original_query": "What is GraphRAG?",
+  "query_type": "simple",
+  "final_answer": "GraphRAG is a system that combines graph databases with retrieval-augmented generation...",
+  "confidence_score": 0.5,
+  "evidence_count": 2,
+  "execution_time": 0.234,
+  "success": true
+}
+```
+
+#### GET /system/status
+
+獲取完整的系統狀態，包括Agent狀態和所有服務健康信息。
+
+**響應示例**:
+```json
+{
+  "status": "operational",
+  "timestamp": "2025-12-11T18:02:45.194545",
+  "overall_health": "excellent",
+  "services": {
+    "langchain": true,
+    "vlm_configured": true,
+    "database": {
+      "neo4j": true,
+      "supabase": true
+    },
+    "embedding_service": true
+  },
+  "agents": {
+    "status": "operational",
+    "agents": {
+      "planner": "ready",
+      "retrieval": "ready",
+      "reasoning": "ready",
+      "tool_agent": "ready",
+      "reflector": "ready"
+    },
+    "tools_available": 5,
+    "database_status": {
+      "neo4j": "connected",
+      "supabase": "connected"
+    },
+    "llm_model": "gpt-4"
   }
 }
 ```

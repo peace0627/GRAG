@@ -74,9 +74,9 @@
 4. 錯誤處理和回溯邏輯
 
 ### 階段 8: 前端介面 (Frontend Interface)
-1. Streamlit 應用框架
+1. 應用框架
 2. 用戶查詢介面
-   - 多語支援 (中/英)
+   - 多語支援
    - 檔案上傳 (PDF, images)
    - Knowledge Area 選擇器
    - 時間範圍篩選 (temporal filter)

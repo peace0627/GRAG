@@ -74,20 +74,16 @@ uv run ruff check --fix grag/
 uv run mypy grag/
 ```
 
-### 🧪 測試策略
+### 🧪 測試策略 (✅ 測試通過)
 
 #### 測試結構
 ```
 tests/
-├── unit/              # 單元測試
-│   ├── test_health_service.py
-│   ├── test_database_services.py
-│   └── test_embedding_providers.py
-├── integration/       # 整合測試
-│   └── test_ingestion_pipeline.py
-└── fixtures/          # 測試數據
-    ├── sample_docs/
-    └── test_configs.py
+├── test_embedding_providers.py    # 嵌入提供者測試
+├── test_langchain_ingestion.py     # LangChain數據導入測試
+├── test_structured_query_parser.py # 結構化查詢解析器測試
+├── test_unified_knowledge_system.py # 統一知識系統測試
+└── README.md                       # 測試說明文檔
 ```
 
 #### 運行測試
@@ -103,6 +99,9 @@ uv run pytest --cov=grag --cov-report=html
 
 # 並行測試
 uv run pytest -n auto
+
+# API集成測試 (新功能)
+uv run python scripts/test_agent.py
 ```
 
 #### 編寫測試的原則

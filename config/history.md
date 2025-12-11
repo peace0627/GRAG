@@ -38,7 +38,36 @@
 - 更好的錯誤處理和fallback機制
 - 類型安全: BaseChatModel 抽象介面
 
+### 2025-12-11: 實現Agentic RAG API整合
+**執行內容**:
+- 實現完整的Backend API整合，連接Agentic RAG Core與前端
+- 創建 `grag/api/schemas.py` 定義完整的API請求/響應模型
+- 實現RAG查詢端點 (`POST /query`) 整合AgenticRAGAgent
+- 添加系統狀態監控 (`GET /system/status`) 包含Agent狀態
+- 實現簡化RAG查詢 (`POST /query/simple`) 作為備選方案
+- 配置懶加載Agent實例管理和錯誤處理
+
+**變更檔案**:
+- `grag/api/schemas.py` (新建 - 完整API Schema定義)
+- `grag/api/app.py` (擴展 - 添加RAG查詢功能)
+- `config/todos.md` (更新 - 標記API任務完成)
+- `config/history.md` (更新記錄)
+
+**技術實現**:
+- **API Schema**: Pydantic模型定義所有請求/響應格式
+- **Agent整合**: 懶加載AgenticRAGAgent實例，支援異步查詢
+- **錯誤處理**: 結構化錯誤響應和Agent初始化失敗處理
+- **類型安全**: 完整的請求驗證和響應序列化
+- **向後兼容**: 保持現有文件管理API不變
+
+**API端點總覽**:
+- `POST /query` - 完整Agentic RAG查詢 (planning + retrieval + reasoning)
+- `POST /query/simple` - 簡化RAG查詢 (SimpleRAGAgent)
+- `GET /system/status` - 系統狀態檢查 (含Agent狀態)
+- `GET /health` - 基礎健康檢查
+- 文件管理端點保持不變
+
 ---
 
-*歷史記錄版本: 1.1*
-*最後更新日期: 2025-12-02*
+*歷史記錄版本: 1.2*
+*最後更新日期: 2025-12-11*
