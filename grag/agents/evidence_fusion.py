@@ -317,6 +317,62 @@ class EvidenceFusionEngine:
             "average_quality": sum(quality_distribution.values()) / total_evidence if total_evidence > 0 else 0
         }
 
+    def _analyze_evidence_contradictions(self, evidence_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze evidence for contradictions and conflicts"""
+        analysis = {
+            "has_contradictions": False,
+            "contradiction_count": 0,
+            "conflicting_evidence_pairs": [],
+            "severity": "none",  # none, low, medium, high
+            "recommendations": []
+        }
+
+        if len(evidence_list) < 2:
+            return analysis
+
+        # Simple contradiction detection (can be enhanced with LLM)
+        content_hashes = {}
+        contradictions_found = []
+
+        for i, evidence in enumerate(evidence_list):
+            content_hash = hash(evidence["content"].lower().strip()[:100])  # First 100 chars
+
+            if content_hash in content_hashes:
+                existing_idx = content_hashes[content_hash]
+                # Check if confidence scores differ significantly
+                conf_diff = abs(evidence["confidence"] - evidence_list[existing_idx]["confidence"])
+
+                if conf_diff > 0.3:  # Significant confidence difference
+                    contradictions_found.append({
+                        "evidence_1": existing_idx,
+                        "evidence_2": i,
+                        "confidence_diff": conf_diff,
+                        "content_similarity": "high"
+                    })
+
+            content_hashes[content_hash] = i
+
+        if contradictions_found:
+            analysis["has_contradictions"] = True
+            analysis["contradiction_count"] = len(contradictions_found)
+            analysis["conflicting_evidence_pairs"] = contradictions_found
+
+            # Assess severity
+            if len(contradictions_found) >= 3:
+                analysis["severity"] = "high"
+            elif len(contradictions_found) >= 2:
+                analysis["severity"] = "medium"
+            else:
+                analysis["severity"] = "low"
+
+            analysis["recommendations"] = [
+                "Consider the source reliability of conflicting evidence",
+                "Look for additional corroborating evidence",
+                "Note uncertainty in areas with conflicting information"
+            ]
+
+        return analysis
+
     def validate_evidence_quality(self, evidence_list: List[UnifiedEvidence]) -> Dict[str, Any]:
         """Validate and assess evidence quality"""
         validation_results = {

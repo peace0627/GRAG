@@ -146,7 +146,7 @@ def main():
         print("\n📊 Test Summary:")
         print("  - Basic configuration validation: ✅")
         print("  - Provider utility functions: ✅")
-        print("  - Provider instantiation (may skip): ⚠️ conditional"
+        print("  - Provider instantiation (may skip): ⚠️ conditional")
         print("\n💡 Note: Full ML testing requires 'pip install sentence-transformers'")
         print("   Set TEST_WITH_MODULES=true to enable complete testing")
 
