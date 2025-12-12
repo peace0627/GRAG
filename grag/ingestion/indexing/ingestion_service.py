@@ -202,9 +202,10 @@ class IngestionService:
         """Initialize ingestion service using environment configuration"""
         # Initialize components using environment settings
         self.vlm_service = VLMService(
-            enable_vlm=True,  # Always enable VLM layer (with fallback for non-text files)
-            enable_mineru=True,
-            enable_ocr=True
+            enable_pymupdf=True,  # PyMuPDF for complete extraction (highest priority)
+            enable_vlm=True,      # VLM for enhancement
+            enable_mineru=True,   # MinerU as fallback
+            enable_ocr=True       # OCR as final fallback
         )
 
         self.chunking_service = ChunkingService()  # Uses settings.chunk_size, etc.
@@ -362,31 +363,37 @@ class IngestionService:
             return result
 
     async def _process_with_vlm_enhanced(self, text: str, file_id: str, file_path: Path):
-        """Enhanced VLM processing with fallback - 優先調用真實VLM服務！"""
+        """Enhanced VLM processing with fallback - 總是先提取完整文字，再用VLM增強"""
         try:
-            # 優先嘗試真實的VLM服務處理實際文件
-            logger.info(f"Attempting real VLM service processing for {file_path.name}")
-            vlm_output = await self._run_vlm_processing(file_path, file_id, settings.knowledge_area_id)
-            vlm_output.metadata = vlm_output.metadata or {}
-            vlm_output.metadata["processed_by"] = vlm_output.metadata.get("processing_layer", "vlm")
-            logger.info("VLM service processing successful!")
-            return vlm_output
+            # 首先進行完整的文字提取作為基礎
+            logger.info(f"Extracting full text content from {file_path.name}")
+            full_text_output = await self._extract_full_text_from_file(file_path, file_id, text)
 
-        except Exception as vlm_error:
-            logger.warning(f"VLM service processing failed: {vlm_error}, falling back to text processing")
-            # VLM服務失敗，回退到文字處理
+            # 然後嘗試VLM增強
             try:
-                logger.info("Falling back to structured text processing")
-                vlm_output = await self._process_text_with_vlm(text, file_id)
-                vlm_output.metadata = vlm_output.metadata or {}
-                vlm_output.metadata["processed_by"] = "text_fallback"
-                vlm_output.metadata["fallback_reason"] = "vlm_service_failed"
-                return vlm_output
+                logger.info(f"Attempting VLM enhancement for {file_path.name}")
+                vlm_output = await self._run_vlm_processing(file_path, file_id, settings.knowledge_area_id)
 
-            except Exception as fallback_error:
-                logger.error(f"All processing methods failed: {fallback_error}")
-                # 最終降級到結構化文字分析
-                return await self._create_fallback_output(text, file_id, file_path, "all_methods_failed")
+                # 合併VLM結果和完整文字
+                combined_output = self._merge_vlm_and_text(vlm_output, full_text_output)
+                combined_output.metadata = combined_output.metadata or {}
+                combined_output.metadata["processed_by"] = "vlm_enhanced_text"
+                combined_output.metadata["full_text_extracted"] = True
+                logger.info("VLM enhancement successful!")
+                return combined_output
+
+            except Exception as vlm_error:
+                logger.warning(f"VLM enhancement failed: {vlm_error}, using full text extraction only")
+                # VLM增強失敗，但我們有完整的文字
+                full_text_output.metadata = full_text_output.metadata or {}
+                full_text_output.metadata["processed_by"] = "text_only"
+                full_text_output.metadata["vlm_enhancement_failed"] = str(vlm_error)
+                return full_text_output
+
+        except Exception as general_error:
+            logger.error(f"All processing methods failed: {general_error}")
+            # 最終降級到結構化文字分析
+            return await self._create_fallback_output(text, file_id, file_path, "all_methods_failed")
 
     async def _process_text_with_vlm(self, text: str, file_id: str):
         """Process text directly with VLM service"""
@@ -421,12 +428,105 @@ class IngestionService:
             langchain_docs, file_path, file_id
         )
 
+    async def _extract_full_text_from_file(self, file_path: Path, file_id: str, text: str):
+        """Extract full text content from file for complete processing"""
+        try:
+            # Use LangChain loader to get complete text extraction
+            langchain_docs = await self.langchain_loader.load_document(file_path)
+            full_text = self.langchain_loader.combine_documents(langchain_docs)
+
+            # Create a structured output with full text
+            from grag.ingestion.vision.vlm_schemas import VLMOutput, VLMRegion
+
+            regions = []
+            if full_text:
+                # Create a region for the full text content
+                region = VLMRegion(
+                    region_id=f"full_text_{file_id}",
+                    modality="text",
+                    description=full_text[:500] + "..." if len(full_text) > 500 else full_text,
+                    bbox=[0, 0, 800, 600],  # Full document area
+                    confidence=0.9,
+                    page=1
+                )
+                regions.append(region)
+
+            return VLMOutput(
+                file_id=file_id,
+                ocr_text=full_text,
+                regions=regions,
+                tables=[],
+                charts=[],
+                visual_facts=[],
+                metadata={
+                    "processing_layer": "FULL_TEXT_EXTRACTION",
+                    "quality_level": "high",
+                    "text_length": len(full_text)
+                }
+            )
+
+        except Exception as e:
+            logger.warning(f"Full text extraction failed: {e}, falling back to provided text")
+            # Fallback to provided text
+            from grag.ingestion.vision.vlm_schemas import VLMOutput, VLMRegion
+
+            regions = []
+            if text:
+                region = VLMRegion(
+                    region_id=f"text_fallback_{file_id}",
+                    modality="text",
+                    description=text[:500] + "..." if len(text) > 500 else text,
+                    bbox=[0, 0, 800, 600],
+                    confidence=0.7,
+                    page=1
+                )
+                regions.append(region)
+
+            return VLMOutput(
+                file_id=file_id,
+                ocr_text=text,
+                regions=regions,
+                tables=[],
+                charts=[],
+                visual_facts=[],
+                metadata={
+                    "processing_layer": "TEXT_FALLBACK",
+                    "quality_level": "medium",
+                    "text_length": len(text)
+                }
+            )
+
+    def _merge_vlm_and_text(self, vlm_output, text_output):
+        """Merge VLM analysis results with full text extraction"""
+        # Use the full text content but enhance with VLM metadata
+        merged_output = text_output.copy()
+
+        # Keep VLM metadata if available
+        if vlm_output.metadata:
+            merged_output.metadata = {
+                **merged_output.metadata,
+                **vlm_output.metadata,
+                "vlm_enhanced": True
+            }
+
+        # Add any visual facts from VLM analysis
+        if vlm_output.visual_facts:
+            merged_output.visual_facts = vlm_output.visual_facts
+
+        # Add tables and charts from VLM if available
+        if vlm_output.tables:
+            merged_output.tables = vlm_output.tables
+        if vlm_output.charts:
+            merged_output.charts = vlm_output.charts
+
+        return merged_output
+
     async def _create_fallback_output(self, text: str, file_id: str, file_path: Path, reason: str):
         """Create fallback output when all methods fail"""
         logger.warning(f"Creating fallback output due to: {reason}")
 
         # 使用結構化文字分析作為最終fallback
-        from langchain.schema import Document as LangchainDocument
+        from langchain_core.documents import Document as LangchainDocument
         mock_doc = LangchainDocument(page_content=text)
 
         return await self.text_fallback.create_structured_output(

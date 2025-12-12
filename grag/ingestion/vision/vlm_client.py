@@ -208,8 +208,12 @@ class VLMClient:
             # Convert PDF first page to image using pdf2image
             from pdf2image import convert_from_path
 
-            # Convert only first page for efficiency
-            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=150)
+            # Get total pages first
+            total_pages = len(convert_from_path(pdf_path, first_page=1, last_page=1))
+            max_pages = min(3, total_pages)  # Limit to 3 pages max for efficiency
+
+            # Convert first few pages for better content extraction
+            images = convert_from_path(pdf_path, first_page=1, last_page=max_pages, dpi=150)
 
             if not images:
                 raise Exception("Failed to convert PDF to image")

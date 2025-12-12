@@ -21,26 +21,45 @@ class VLMService:
     Processing order: VLM → MinerU → OCR (three-layer fallback)
     """
 
-    def __init__(self, enable_vlm: bool = True, enable_mineru: bool = True, enable_ocr: bool = True):
+    def __init__(self, enable_pymupdf: bool = True, enable_vlm: bool = True, enable_mineru: bool = True, enable_ocr: bool = True):
         """
         Initialize VLMService with configurable processing layers
 
+        Processing order: PyMuPDF → VLM → MinerU → OCR
+
         Args:
-            enable_vlm: Enable VLM processing (first priority)
-            enable_mineru: Enable MinerU processing (second priority)
+            enable_pymupdf: Enable PyMuPDF processing (highest priority for complete extraction)
+            enable_vlm: Enable VLM processing (second priority)
+            enable_mineru: Enable MinerU processing (third priority)
             enable_ocr: Enable OCR processing (final fallback)
         """
         # Initialize processors (lazy loading)
+        self.pymupdf_processor = None  # PyMuPDF for complete extraction
         self.vlm_processor = None  # Placeholder for VLM (Qwen2VL, etc.)
         self.mineru_processor = None
         self.ocr_processor = None
 
         # Enable flags
+        self.enable_pymupdf = enable_pymupdf
         self.enable_vlm = enable_vlm
         self.enable_mineru = enable_mineru
         self.enable_ocr = enable_ocr
 
-        # Lazy load based on enable flags
+        # Lazy load based on enable flags - PyMuPDF first
+        if enable_pymupdf:
+            try:
+                # Lazy import to avoid module loading issues
+                from .pymupdf_processor import PyMuPDFProcessor
+                logger.info("🔄 Attempting to initialize PyMuPDF processor...")
+                self.pymupdf_processor = PyMuPDFProcessor()
+                logger.info("✅ PyMuPDF processor initialized successfully")
+            except Exception as e:
+                logger.error(f"❌ PyMuPDF processor initialization failed: {e}")
+                logger.error(f"❌ Full traceback: {e.__class__.__name__}: {e}")
+                import traceback
+                logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                self.pymupdf_processor = None
+
         if enable_vlm:
             try:
                 self.vlm_processor = self._load_vlm_processor()
@@ -65,7 +84,7 @@ class VLMService:
                         area_id: Optional[str] = None) -> VLMOutput:
         """Process a document with vision-language analysis
 
-        Processing order: VLM → MinerU → OCR (three-layer fallback)
+        Processing order: PyMuPDF → VLM → MinerU → OCR (four-layer fallback)
 
         Args:
             file_path: Path to the document file
@@ -80,15 +99,32 @@ class VLMService:
 
         errors = []
 
-        # Layer 1: Try VLM processing first
+        # Layer 1: Try PyMuPDF processing first (highest priority for complete extraction)
+        if self.enable_pymupdf and self.pymupdf_processor:
+            try:
+                logger.info(f"Attempting PyMuPDF processing for {file_id} (complete extraction)")
+                output = self.pymupdf_processor.process_document(file_path, file_id, area_id)
+                processing_time = time.time() - start_time
+                output.processing_time = processing_time
+                output.metadata = output.metadata or {}
+                output.metadata["processing_layer"] = "PyMuPDF"
+                logger.info(f"PyMuPDF processing completed for {file_id} in {processing_time:.2f}s")
+                return output
+            except Exception as e:
+                error_msg = f"PyMuPDF processing failed: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Layer 2: Try VLM processing (for cases where PyMuPDF isn't suitable)
         if self.enable_vlm and self.vlm_processor:
             try:
-                logger.info(f"Attempting VLM processing for {file_id}")
+                logger.info(f"Falling back to VLM processing for {file_id}")
                 output = self.vlm_processor.process_document(file_path, file_id, area_id)
                 processing_time = time.time() - start_time
                 output.processing_time = processing_time
                 output.metadata = output.metadata or {}
                 output.metadata["processing_layer"] = "VLM"
+                output.metadata["fallback_errors"] = errors
                 logger.info(f"VLM processing completed for {file_id} in {processing_time:.2f}s")
                 return output
             except Exception as e:
@@ -96,7 +132,7 @@ class VLMService:
                 logger.warning(error_msg)
                 errors.append(error_msg)
 
-        # Layer 2: Try MinerU processing
+        # Layer 3: Try MinerU processing
         if self.enable_mineru and self.mineru_processor:
             try:
                 logger.info(f"Falling back to MinerU processing for {file_id}")
@@ -113,7 +149,7 @@ class VLMService:
                 logger.warning(error_msg)
                 errors.append(error_msg)
 
-        # Layer 3: Final fallback to OCR processing
+        # Layer 4: Final fallback to OCR processing
         if self.enable_ocr and self.ocr_processor:
             try:
                 logger.info(f"Falling back to OCR processing for {file_id}")
@@ -138,7 +174,7 @@ class VLMService:
         fallback_output = VLMOutput(
             file_id=file_id,
             area_id=area_id,
-            ocr_text="Fallback text processing - OCR/VLM layers unavailable",
+            ocr_text="Fallback text processing - All processing layers unavailable",
             regions=[],
             tables=[],
             charts=[],
@@ -282,11 +318,13 @@ class VLMService:
         """Get processing statistics"""
         return {
             "supported_formats": ["pdf", "png", "jpg", "jpeg", "bmp", "tiff"],
-            "processing_order": "VLM → MinerU → OCR",
+            "processing_order": "PyMuPDF → VLM → MinerU → OCR",
+            "pymupdf_enabled": self.enable_pymupdf and self.pymupdf_processor is not None,
             "vlm_enabled": self.enable_vlm and self.vlm_processor is not None,
             "mineru_enabled": self.enable_mineru and self.mineru_processor is not None,
             "ocr_enabled": self.enable_ocr and self.ocr_processor is not None,
             "fallback_layers": sum([
+                self.enable_pymupdf and self.pymupdf_processor is not None,
                 self.enable_vlm and self.vlm_processor is not None,
                 self.enable_mineru and self.mineru_processor is not None,
                 self.enable_ocr and self.ocr_processor is not None
