@@ -85,7 +85,6 @@ class ApiService {
 
   // Document Management
   async listDocuments(limit?: number, offset?: number): Promise<{
-    success: boolean;
     documents: any[];
     pagination: { limit: number; offset: number; total: number };
   }> {

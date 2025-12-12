@@ -30,6 +30,8 @@ class HealthService:
         status.update({
             'langchain': self._check_langchain(),
             'vlm_configured': self._check_vlm_config(),
+            'vlm_service': self._check_vlm_service(),
+            'llm_service': self._check_llm_service(),
             'database': self._check_database_connections(),
             'embedding_service': self._check_embedding_service()
         })
@@ -97,6 +99,65 @@ class HealthService:
             return True
         except Exception:
             return False
+
+    def _check_vlm_service(self) -> Dict[str, Any]:
+        """檢查 VLM 服務實際連線狀態"""
+        vlm_status = {
+            'available': False,
+            'provider': None,
+            'model': None,
+            'error': None
+        }
+
+        try:
+            from grag.ingestion.vision.vlm_client import VLMClient
+
+            # 嘗試創建VLM客戶端
+            client = VLMClient(api_type='ollama')
+
+            # 檢查服務可用性
+            if client.is_available():
+                vlm_status.update({
+                    'available': True,
+                    'provider': 'ollama',
+                    'model': client.model
+                })
+            else:
+                vlm_status['error'] = 'VLM service not responding'
+
+        except Exception as e:
+            vlm_status['error'] = str(e)
+
+        return vlm_status
+
+    def _check_llm_service(self) -> Dict[str, Any]:
+        """檢查 LLM 服務實際連線狀態"""
+        llm_status = {
+            'available': False,
+            'provider': None,
+            'model': None,
+            'error': None
+        }
+
+        try:
+            from grag.core.llm_factory import LLMFactory
+
+            # 驗證LLM連接性
+            connectivity = LLMFactory.validate_llm_connectivity()
+
+            if connectivity['status'] == 'operational':
+                llm_status.update({
+                    'available': True,
+                    'provider': settings.llm_provider,
+                    'model': settings.llm_model
+                })
+            else:
+                llm_status['error'] = 'LLM connectivity validation failed'
+
+        except Exception as e:
+            llm_status['error'] = str(e)
+
+        return llm_status
 
     def _check_embedding_service(self) -> bool:
         """檢查嵌入服務狀態"""

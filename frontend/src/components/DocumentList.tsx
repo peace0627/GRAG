@@ -14,8 +14,14 @@ interface Document {
   created_at: string;
   updated_at: string;
   chunk_count: number;
-  file_size: number;
-  processing_status: string;
+  vector_count: number;
+  processing_status?: string;
+  processing_method?: string;
+  processing_quality?: string;
+  content_quality_score?: number;
+  vlm_provider?: string;
+  vlm_success?: boolean;
+  total_characters?: number;
 }
 
 export interface DocumentListRef {
@@ -32,11 +38,8 @@ export const DocumentList = forwardRef<DocumentListRef>((props, ref) => {
     setError(null);
     try {
       const response = await apiService.listDocuments(50, 0);
-      if (response.success) {
-        setDocuments(response.documents);
-      } else {
-        setError('獲取文檔列表失敗');
-      }
+      // API直接返回documents和pagination，沒有success字段
+      setDocuments(response.documents || []);
     } catch (err) {
       console.error('Failed to fetch documents:', err);
       setError('網路錯誤，無法獲取文檔列表');
@@ -154,21 +157,66 @@ export const DocumentList = forwardRef<DocumentListRef>((props, ref) => {
                     </Badge>
                   </div>
 
-                  <div className="flex items-center gap-4 text-sm text-gray-500">
+                  <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3" />
                       {formatDate(doc.created_at)}
                     </span>
                     <span className="flex items-center gap-1">
                       <Database className="w-3 h-3" />
-                      {doc.chunk_count} 個片段
+                      {doc.chunk_count} 個片段, {doc.vector_count || 0} 個向量
                     </span>
-                    {doc.file_size > 0 && (
+                    {doc.total_characters && (
                       <span>
-                        {formatFileSize(doc.file_size)}
+                        {doc.total_characters.toLocaleString()} 字符
                       </span>
                     )}
                   </div>
+
+                  {/* Processing Method Information */}
+                  {(doc.processing_method || doc.vlm_provider) && (
+                    <div className="flex items-center gap-2 mb-2">
+                      {doc.processing_method && (
+                        <Badge variant="outline" className="text-xs">
+                          處理方法: {doc.processing_method}
+                        </Badge>
+                      )}
+                      {doc.vlm_provider && (
+                        <Badge variant="outline" className="text-xs">
+                          VLM: {doc.vlm_provider}
+                        </Badge>
+                      )}
+                      {doc.processing_quality && (
+                        <Badge
+                          variant={doc.processing_quality === '高品質' ? 'default' : 'secondary'}
+                          className="text-xs"
+                        >
+                          {doc.processing_quality}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Quality Score */}
+                  {doc.content_quality_score !== undefined && (
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs text-gray-500">內容品質分數:</span>
+                      <div className="flex items-center gap-1">
+                        <div className="w-16 h-2 bg-gray-200 rounded">
+                          <div
+                            className={`h-2 rounded ${
+                              doc.content_quality_score > 0.7 ? 'bg-green-500' :
+                              doc.content_quality_score > 0.4 ? 'bg-yellow-500' : 'bg-red-500'
+                            }`}
+                            style={{ width: `${doc.content_quality_score * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-xs text-gray-600">
+                          {(doc.content_quality_score * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <p className="text-xs text-gray-400 mt-1 truncate">
                     {doc.source_path}

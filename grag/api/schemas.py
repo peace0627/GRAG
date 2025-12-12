@@ -124,6 +124,12 @@ class DocumentInfo(BaseModel):
     updated_at: datetime
     chunk_count: int = 0
     vector_count: int = 0
+    processing_method: Optional[str] = Field(default=None, description="Document processing method (VLM, OCR, Text)")
+    processing_quality: Optional[str] = Field(default=None, description="Processing quality assessment")
+    content_quality_score: Optional[float] = Field(default=None, description="Content quality score (0.0-1.0)")
+    vlm_provider: Optional[str] = Field(default=None, description="VLM provider used")
+    vlm_success: Optional[bool] = Field(default=None, description="Whether VLM processing succeeded")
+    total_characters: Optional[int] = Field(default=None, description="Total characters extracted")
 
 
 class DocumentListResponse(BaseModel):

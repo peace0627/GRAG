@@ -567,21 +567,56 @@ class DatabaseManager:
         if vector_data_dict.get('fact_id'):
             vector_data_dict['fact_id'] = str(vector_data_dict['fact_id'])
 
+        # 使用JSONB存儲向量，因為Supabase pgvector可能不被Python客戶端正確支持
+        if 'embedding' in vector_data_dict:
+            embedding = vector_data_dict['embedding']
+            if isinstance(embedding, str):
+                # 如果已經是字符串，嘗試解析回列表（這不應該發生）
+                import json
+                try:
+                    embedding = json.loads(embedding)
+                except:
+                    raise Exception("Embedding is stored as string, cannot convert back")
+
+            # 保持為float列表，Supabase應該能夠處理
+            vector_data_dict['embedding'] = [float(x) for x in embedding]
+
         # Create final record dict
         record_dict = {
             'vector_id': str(vector_id),  # 轉換為字串供Supabase使用
             **vector_data_dict
         }
 
-        client = self.get_supabase_client()
-        response = client.table('vectors').insert(record_dict).execute()
+        # 調試：記錄向量數據
+        logger.info(f"Inserting vector record with embedding length: {len(record_dict['embedding'])}")
+        logger.info(f"Embedding type: {type(record_dict['embedding'])}")
+        logger.info(f"First 5 embedding values: {record_dict['embedding'][:5]}")
 
-        if response.data:
-            logger.info(f"Inserted vector record: {vector_id}")
-            return vector_id
-        else:
-            logger.error(f"Supabase insert failed: {response}")
-            raise Exception("Failed to insert vector record")
+        client = self.get_supabase_client()
+        try:
+            response = client.table('vectors').insert(record_dict).execute()
+
+            if response.data:
+                logger.info(f"Successfully inserted vector record: {vector_id}")
+                return vector_id
+            else:
+                logger.error(f"Supabase insert failed - no data returned. Response: {response}")
+                logger.error(f"Response status: {getattr(response, 'status_code', 'unknown')}")
+                # Try to get more error details
+                if hasattr(response, 'json'):
+                    try:
+                        error_details = response.json()
+                        logger.error(f"Response JSON: {error_details}")
+                    except:
+                        pass
+                raise Exception(f"Supabase insert failed: {response}")
+
+        except Exception as e:
+            logger.error(f"Supabase vector insert error: {e}")
+            # Don't re-raise the exception - log it and continue
+            # This allows the ingestion to continue even if vector storage fails
+            logger.warning("Vector storage failed, but continuing with document ingestion")
+            raise  # Re-raise to let caller handle it
 
     async def get_vector_record(self, vector_id: UUID) -> Optional[VectorRecord]:
         """
@@ -610,25 +645,94 @@ class DatabaseManager:
 
         return None
 
-    async def search_similar_vectors(self, query_embedding: list, limit: int = 10) -> list[VectorRecord]:
+    async def search_similar_vectors(self, query_embedding: list, limit: int = 10,
+                                   threshold: float = 0.1) -> list[VectorRecord]:
         """
-        Search similar vectors using pgvector, returning typed VectorRecord instances
+        Search similar vectors using pgvector cosine similarity, returning typed VectorRecord instances
 
         Args:
             query_embedding: Query vector
             limit: Maximum number of results
+            threshold: Similarity threshold (0.1 = 90% similar, higher = more similar)
 
         Returns:
-            List of VectorRecord instances
+            List of VectorRecord instances ordered by similarity
         """
         client = self.get_supabase_client()
 
-        # Note: In production, you would use proper vector similarity search
-        # This is a simplified implementation
-        response = client.table('vectors').select('*').limit(limit).execute()
+        # Convert embedding to string format for Supabase RPC call
+        embedding_str = f"[{','.join(map(str, query_embedding))}]"
+
+        try:
+            # Use Supabase RPC to call pgvector similarity search
+            # This assumes a PostgreSQL function is set up for vector similarity
+            response = client.rpc('search_similar_vectors', {
+                'query_embedding': embedding_str,
+                'match_threshold': threshold,
+                'match_count': limit
+            }).execute()
+
+            results = []
+            for item in response.data:
+                # Convert UUID strings back to UUID objects
+                item['vector_id'] = UUID(item['vector_id'])
+                item['document_id'] = UUID(item['document_id'])
+                if item.get('chunk_id'):
+                    item['chunk_id'] = UUID(item['chunk_id'])
+                if item.get('fact_id'):
+                    item['fact_id'] = UUID(item['fact_id'])
+
+                vector_record = VectorRecord(**item)
+                results.append(vector_record)
+
+            logger.info(f"Vector similarity search returned {len(results)} results")
+            return results
+
+        except Exception as e:
+            logger.warning(f"pgvector similarity search failed: {e}, falling back to basic search")
+            # Fallback: Get all vectors and compute similarity in Python
+            return await self._fallback_similarity_search(query_embedding, limit)
+
+    async def _fallback_similarity_search(self, query_embedding: list, limit: int = 10) -> list[VectorRecord]:
+        """Fallback similarity search when pgvector RPC is not available"""
+        import numpy as np
+
+        client = self.get_supabase_client()
+
+        # Get all vectors (limit to reasonable number for fallback)
+        response = client.table('vectors').select('*').limit(1000).execute()
+
+        if not response.data:
+            return []
+
+        # Compute cosine similarity for each vector
+        similarities = []
+        query_vec = np.array(query_embedding)
+
+        for item in response.data:
+            # 處理JSONB數據 - 可能是字符串或列表
+            embedding_data = item['embedding']
+            if isinstance(embedding_data, str):
+                # 如果是字符串，嘗試解析JSON
+                import json
+                try:
+                    embedding_data = json.loads(embedding_data)
+                except:
+                    logger.warning(f"無法解析向量字符串: {embedding_data[:50]}...")
+                    continue
+
+            db_embedding = np.array(embedding_data)
+            # Cosine similarity
+            similarity = np.dot(query_vec, db_embedding) / (np.linalg.norm(query_vec) * np.linalg.norm(db_embedding))
+
+            similarities.append((similarity, item))
+
+        # Sort by similarity (descending) and take top results
+        similarities.sort(key=lambda x: x[0], reverse=True)
+        top_results = similarities[:limit]
 
         results = []
-        for item in response.data:
+        for similarity, item in top_results:
             # Convert UUID strings back to UUID objects
             item['vector_id'] = UUID(item['vector_id'])
             item['document_id'] = UUID(item['document_id'])
@@ -637,7 +741,20 @@ class DatabaseManager:
             if item.get('fact_id'):
                 item['fact_id'] = UUID(item['fact_id'])
 
+            # Handle embedding - it might be stored as JSON string in Supabase
+            if isinstance(item.get('embedding'), str):
+                import json
+                try:
+                    item['embedding'] = json.loads(item['embedding'])
+                except:
+                    logger.warning(f"Failed to parse embedding JSON: {item['embedding'][:50]}...")
+                    continue
+
+            # Add similarity score to metadata
+            item['similarity_score'] = float(similarity)
+
             vector_record = VectorRecord(**item)
             results.append(vector_record)
 
+        logger.info(f"Fallback similarity search returned {len(results)} results")
         return results

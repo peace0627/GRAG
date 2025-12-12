@@ -198,120 +198,127 @@ class VLMClient:
             raise Exception(f"Image encoding failed: {e}")
 
     def _process_pdf_as_image(self, pdf_path: Path) -> Dict[str, Any]:
-        """Convert PDF first page to text and process with bulletproof error handling"""
+        """Convert PDF first page to image and process with REAL VLM API"""
         import tempfile
-        import pdfplumber
         import logging
 
-        # Disable pdfplumber font warnings completely
-        pdfplumber_logger = logging.getLogger("pdfplumber")
-        pdfplumber_logger.setLevel(logging.ERROR)  # Suppress font errors
-
         try:
-            logger.info(f"Processing PDF with bulletproof error handling: {pdf_path.name}")
+            logger.info(f"Converting PDF to image for VLM processing: {pdf_path.name}")
 
-            page_text = ""
-            page_width = 800.0
-            page_height = 600.0
+            # Convert PDF first page to image using pdf2image
+            from pdf2image import convert_from_path
 
-            # 第一層: pdfplumber處理 (嚴格抑制所有錯誤)
+            # Convert only first page for efficiency
+            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=150)
+
+            if not images:
+                raise Exception("Failed to convert PDF to image")
+
+            first_page_image = images[0]
+
+            # Save image to temporary file for base64 encoding
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_image:
+                temp_image_path = Path(temp_image.name)
+                first_page_image.save(temp_image_path, 'PNG')
+
             try:
-                with pdfplumber.open(pdf_path) as pdf:
-                    if len(pdf.pages) == 0:
-                        raise Exception("No pages in PDF")
+                # Encode image to base64
+                base64_image = self._encode_image_to_base64(temp_image_path)
 
-                    first_page = pdf.pages[0]
-                    page_width = float(first_page.width or 800)
-                    page_height = float(first_page.height or 600)
+                # Create VLM analysis prompt for document processing
+                prompt = """
+                請詳細分析這份文檔圖像。請提供以下信息：
+                1. 文檔的整體內容和主題
+                2. 主要文字內容和結構
+                3. 任何表格、圖表或數據
+                4. 重要的可視元素和佈局
+                5. 文檔類型和目的
 
-                    # 完全抑制字體錯誤的文字提取
-                    try:
-                        page_text = first_page.extract_text() or ""
-                        # 祛除潛在的編碼問題
-                        if not isinstance(page_text, str):
-                            page_text = str(page_text or "")
-                    except Exception as font_error:
-                        # 完全忽略字體相關錯誤
-                        logger.debug(f"Font error suppressed: {str(font_error)[:50]}...")
-                        page_text = f"PDF {pdf_path.name} - font errors encountered but continuing"
-                    finally:
-                        try:
-                            first_page.close()
-                        except:
-                            pass  # Ignore close errors
-                        try:
-                            pdf.close()
-                        except:
-                            pass  # Ignore close errors
+                請用JSON格式輸出，包含以下字段：
+                {
+                    "description": "文檔整體描述",
+                    "document_type": "文檔類型",
+                    "main_content": "主要內容摘要",
+                    "regions": [{"text": "區域文字", "bbox": [x,y,w,h], "type": "text/table/chart"}],
+                    "tables": [{"headers": [...], "rows": [...], "description": "..."}],
+                    "charts": [{"type": "bar/line/pie", "description": "...", "data_points": [...]}],
+                    "key_findings": ["重要發現1", "重要發現2"],
+                    "visual_elements": ["圖表", "表格", "圖像"]
+                }
+                """
 
-            except Exception as pdf_open_error:
-                logger.warning(f"PDF opening failed, trying backup: {str(pdf_open_error)[:50]}...")
+                # Call REAL VLM API through Ollama
+                logger.info(f"Sending PDF page to VLM API (Ollama {self.model})")
+                vlm_response = self._call_vision_api(prompt, base64_image)
 
-                # 第二層: PyPDF2備用處理器
-                try:
-                    import PyPDF2
-                    with open(pdf_path, 'rb') as file:
-                        reader = PyPDF2.PdfReader(file)
-                        if len(reader.pages) > 0:
-                            page = reader.pages[0]
-                            page_text = page.extract_text() or "PDF backup text extraction"
-                            logger.info("Successfully switched to PyPDF2 backup for text extraction")
-                except Exception as backup_error:
-                    logger.error(f"All PDF extraction methods failed: {str(backup_error)[:50]}...")
+                logger.info(f"Successfully processed PDF {pdf_path.name} with REAL VLM API")
+                return vlm_response
 
-                    # 第三層: 最終fallback - 用文件名創建描述
-                    page_text = f"PDF document: {pdf_path.name} - unable to extract text due to encryption or format issues"
-
-            # Clean and validate extracted text
-            if not isinstance(page_text, str):
-                page_text = str(page_text or "")
-            page_text = page_text.strip()
-            if len(page_text) == 0:
-                page_text = f"PDF {pdf_path.name} - no readable text found (encrypted or image-based PDF)"
-
-            # Limit text length for processing
-            if len(page_text) > 2000:
-                page_text = page_text[:2000] + "..."
-
-            # Create a VLM-compatible response (this is still a mock but more robust)
-            mock_response = {
-                "content": json.dumps({
-                    "description": f"PDF Document ({pdf_path.name}) Content:\n{page_text}",
-                    "regions": [{
-                        "text": page_text[:500] if len(page_text) > 500 else page_text,
-                        "bbox": [10, 10, page_width - 20, page_height - 20],
-                        "confidence": 0.9 if len(page_text) > 100 else 0.6
-                    }] if page_text else [],
-                    "tables": [],  # Would need advanced table extraction
-                    "charts": [],  # Would need chart detection
-                    "visual_facts": [{
-                        "entity": f"PDF Document ({pdf_path.name})",
-                        "value": f"Text extracted ({len(page_text)} characters) from PDF",
-                        "region": "full_page",
-                        "confidence": 0.9 if len(page_text) > 100 else 0.6
-                    }] if page_text else []
-                }, ensure_ascii=False)  # Allow Chinese characters
-            }
-
-            logger.info(f"Successfully processed PDF {pdf_path.name} with text extraction ({len(page_text)} chars)")
-            return mock_response
+            finally:
+                # Clean up temporary image file
+                temp_image_path.unlink(missing_ok=True)
 
         except Exception as e:
-            error_msg = f"PDF text processing failed: {e}"
+            error_msg = f"PDF to VLM processing failed: {e}"
             logger.error(error_msg)
 
-            # Create a minimal fallback response so system can continue
-            fallback_response = {
+            # Fallback: try basic text extraction + mock VLM response
+            try:
+                logger.info("Attempting fallback text extraction for PDF")
+                import pdfplumber
+
+                with pdfplumber.open(pdf_path) as pdf:
+                    if len(pdf.pages) > 0:
+                        first_page = pdf.pages[0]
+                        page_text = first_page.extract_text() or ""
+                        page_text = page_text.strip()[:2000]  # Limit text length
+
+                        # Create fallback VLM response with extracted text
+                        # Use actual extracted text as description, not fixed fallback message
+                        actual_description = page_text[:500] + "..." if len(page_text) > 500 else page_text
+                        if not actual_description.strip():
+                            actual_description = f"PDF Document ({pdf_path.name}) - No readable text found"
+
+                        fallback_response = {
+                            "content": json.dumps({
+                                "description": actual_description,
+                                "document_type": "PDF Document",
+                                "main_content": page_text[:1000] + "..." if len(page_text) > 1000 else page_text,
+                                "regions": [{
+                                    "text": page_text[:500] + "..." if len(page_text) > 500 else page_text,
+                                    "bbox": [10, 10, 780, 580],
+                                    "type": "text",
+                                    "confidence": 0.7
+                                }] if page_text else [],
+                                "tables": [],
+                                "charts": [],
+                                "key_findings": [f"Text extracted from PDF using fallback method ({len(page_text)} chars)"],
+                                "visual_elements": ["text"],
+                                "processing_method": "pdfplumber_fallback"
+                            }, ensure_ascii=False)
+                        }
+
+                        logger.info(f"Fallback text extraction successful for {pdf_path.name}")
+                        return fallback_response
+
+            except Exception as fallback_error:
+                logger.error(f"Fallback text extraction also failed: {fallback_error}")
+
+            # Final fallback - minimal response
+            minimal_response = {
                 "content": json.dumps({
-                    "description": f"PDF {pdf_path.name} - processing failed, but system continuing",
+                    "description": f"PDF {pdf_path.name} - VLM processing failed completely",
+                    "document_type": "PDF Document",
+                    "main_content": f"Unable to process PDF content due to: {str(e)}",
                     "regions": [],
                     "tables": [],
                     "charts": [],
-                    "visual_facts": []
+                    "key_findings": ["Processing failed"],
+                    "visual_elements": []
                 })
             }
 
-            return fallback_response
+            return minimal_response
 
     def _parse_vlm_response(self, vlm_response: Dict[str, Any], file_id: str, area_id: Optional[str] = None) -> VLMOutput:
         """Parse VLM response into structured VLMOutput"""

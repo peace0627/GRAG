@@ -145,7 +145,8 @@ class AgenticRAGAgent:
     async def _generate_final_answer(self, query_state: QueryState) -> str:
         """Generate the final answer using LLM with source-aware evidence processing"""
         if not query_state.collected_evidence:
-            return "I couldn't find sufficient information to answer your question. Could you provide more details."
+            # Execute expanded search and analysis when confidence is low
+            return await self._generate_low_confidence_answer(query_state)
 
         # Convert evidence to UnifiedEvidence format for enhanced processing
         unified_evidence = await self._convert_to_unified_evidence(query_state.collected_evidence)
@@ -405,6 +406,218 @@ IMPORTANT: Evidence contains contradictions (Severity: {severity.upper()})
             enhanced_answer += f"\n\n🎯 Overall confidence: {confidence_level} ({overall_confidence:.2f})"
 
         return enhanced_answer
+
+    async def _generate_low_confidence_answer(self, query_state: QueryState) -> str:
+        """Generate intelligent answer when confidence is low by analyzing database content"""
+        logger.info("Generating low-confidence answer with database analysis")
+
+        try:
+            # Execute expanded search with very low threshold to find any related content
+            expanded_search_results = await self._execute_expanded_search(query_state.original_query)
+
+            # Analyze available content in the knowledge base
+            kb_analysis = await self._analyze_knowledge_base_content(query_state.original_query)
+
+            # Generate intelligent response based on findings
+            return await self._build_intelligent_low_confidence_response(
+                query_state, expanded_search_results, kb_analysis
+            )
+
+        except Exception as e:
+            logger.error(f"Low confidence answer generation failed: {e}")
+            return f"I couldn't find sufficient information to answer your question about '{query_state.original_query}'. The knowledge base may not contain relevant content for this topic."
+
+    async def _execute_expanded_search(self, query: str) -> Dict[str, Any]:
+        """Execute expanded search with very low thresholds to find any related content"""
+        try:
+            # Use very low threshold to get any potentially related results
+            expanded_params = {
+                "top_k": 20,  # More results
+                "similarity_threshold": 0.0,  # No threshold - return all
+                "include_partial_matches": True
+            }
+
+            # Execute vector search
+            vector_result = await self.retrieval_agent.retrieve(
+                query=query,
+                tool_type=ToolType.VECTOR_SEARCH,
+                parameters=expanded_params
+            )
+
+            # Execute graph search
+            graph_result = await self.retrieval_agent.retrieve(
+                query=query,
+                tool_type=ToolType.GRAPH_TRAVERSAL,
+                parameters={"max_depth": 3, "top_k": 10}
+            )
+
+            # Collect any evidence found
+            vector_evidence = await self.retrieval_agent.collect_evidence(vector_result) if vector_result.vector_results else []
+            graph_evidence = await self.retrieval_agent.collect_evidence(graph_result) if graph_result.graph_results else []
+
+            all_evidence = vector_evidence + graph_evidence
+
+            return {
+                "vector_results_count": len(vector_result.vector_results or []),
+                "graph_results_count": len(graph_result.graph_results or []),
+                "total_evidence_found": len(all_evidence),
+                "evidence": all_evidence[:10],  # Limit to top 10
+                "vector_results": vector_result.vector_results or [],
+                "graph_results": graph_result.graph_results or []
+            }
+
+        except Exception as e:
+            logger.error(f"Expanded search failed: {e}")
+            return {
+                "vector_results_count": 0,
+                "graph_results_count": 0,
+                "total_evidence_found": 0,
+                "evidence": [],
+                "error": str(e)
+            }
+
+    async def _analyze_knowledge_base_content(self, query: str) -> Dict[str, Any]:
+        """Analyze what content is available in the knowledge base"""
+        try:
+            # Get document statistics
+            documents = await self.db_manager.list_documents(limit=100, offset=0)
+
+            # Analyze content themes/topics
+            content_analysis = await self._analyze_content_themes(documents["documents"])
+
+            # Generate query improvement suggestions
+            suggestions = await self._generate_query_improvements(query, content_analysis)
+
+            return {
+                "total_documents": documents["total"],
+                "available_documents": len(documents["documents"]),
+                "content_themes": content_analysis,
+                "query_suggestions": suggestions,
+                "documents_sample": [
+                    {
+                        "title": doc["title"],
+                        "chunk_count": doc["chunk_count"]
+                    } for doc in documents["documents"][:5]  # Sample of 5 docs
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"Knowledge base analysis failed: {e}")
+            return {
+                "total_documents": 0,
+                "available_documents": 0,
+                "content_themes": [],
+                "query_suggestions": ["Try more specific keywords"],
+                "error": str(e)
+            }
+
+    async def _analyze_content_themes(self, documents: List[Dict[str, Any]]) -> List[str]:
+        """Analyze main themes/topics available in documents"""
+        themes = []
+
+        # Simple theme extraction based on document titles and available content
+        for doc in documents:
+            title = doc.get("title", "").lower()
+
+            # Extract potential themes from titles
+            if "陶瓷" in title or "ceramic" in title:
+                if "陶瓷" not in themes:
+                    themes.append("陶瓷")
+            if "3d" in title or "列印" in title or "print" in title:
+                if "3D列印" not in themes:
+                    themes.append("3D列印")
+            if "精密" in title or "precision" in title:
+                if "精密製造" not in themes:
+                    themes.append("精密製造")
+            if "技術" in title or "technology" in title:
+                if "技術" not in themes:
+                    themes.append("技術")
+
+        return themes[:10]  # Limit to top 10 themes
+
+    async def _generate_query_improvements(self, original_query: str, content_analysis: Dict[str, Any]) -> List[str]:
+        """Generate query improvement suggestions based on available content"""
+        suggestions = []
+
+        # Analyze original query
+        query_lower = original_query.lower()
+
+        # Check if query matches available themes
+        available_themes = content_analysis.get("content_themes", [])
+        matched_themes = []
+        unmatched_themes = []
+
+        for theme in available_themes:
+            if theme.lower() in query_lower:
+                matched_themes.append(theme)
+            else:
+                unmatched_themes.append(theme)
+
+        # Generate suggestions based on analysis
+        if matched_themes:
+            suggestions.append(f"您的查詢包含關鍵字 '{matched_themes[0]}'，這與知識庫中的內容相關")
+        else:
+            if unmatched_themes:
+                suggestions.append(f"嘗試使用這些相關關鍵字: {', '.join(unmatched_themes[:3])}")
+
+        # General suggestions
+        suggestions.extend([
+            "使用更具體的技術術語",
+            "嘗試英文關鍵字",
+            "考慮上傳相關技術文檔"
+        ])
+
+        return suggestions[:5]  # Limit to 5 suggestions
+
+    async def _build_intelligent_low_confidence_response(self, query_state: QueryState,
+                                                       search_results: Dict[str, Any],
+                                                       kb_analysis: Dict[str, Any]) -> str:
+        """Build intelligent response when confidence is low"""
+        query = query_state.original_query
+
+        # Check if any evidence was found in expanded search
+        total_evidence = search_results.get("total_evidence_found", 0)
+        available_docs = kb_analysis.get("available_documents", 0)
+        content_themes = kb_analysis.get("content_themes", [])
+        suggestions = kb_analysis.get("query_suggestions", [])
+
+        response_parts = []
+
+        # Main response
+        if total_evidence > 0:
+            response_parts.append(f"雖然我沒有找到關於「{query}」的直接高置信度信息，但我發現了一些潛在相關的內容。")
+        else:
+            response_parts.append(f"我沒有找到關於「{query}」的相關信息。")
+
+        # Knowledge base status
+        if available_docs > 0:
+            response_parts.append(f"\n📚 知識庫狀態：")
+            response_parts.append(f"- 總共 {available_docs} 個文檔")
+            if content_themes:
+                response_parts.append(f"- 主要主題: {', '.join(content_themes)}")
+
+        # Evidence found (if any)
+        if total_evidence > 0:
+            evidence = search_results.get("evidence", [])
+            if evidence:
+                response_parts.append(f"\n🔍 找到的相關內容：")
+                for i, ev in enumerate(evidence[:3]):  # Show top 3
+                    content_preview = ev.content[:100] + "..." if len(ev.content) > 100 else ev.content
+                    response_parts.append(f"{i+1}. {content_preview}")
+
+        # Suggestions
+        if suggestions:
+            response_parts.append(f"\n💡 建議：")
+            for suggestion in suggestions:
+                response_parts.append(f"- {suggestion}")
+
+        # Call to action
+        if available_docs == 0:
+            response_parts.append(f"\n📤 建議上傳相關技術文檔來擴展知識庫。")
+        else:
+            response_parts.append(f"\n🔄 請嘗試使用不同的關鍵字或更具體的查詢。")
+
+        return "\n".join(response_parts)
 
     async def get_system_status(self) -> Dict[str, Any]:
         """Get the current status of all agents and components"""

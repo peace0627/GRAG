@@ -12,7 +12,10 @@ import {
   Database,
   Server,
   Wifi,
-  WifiOff
+  WifiOff,
+  Eye,
+  MessageSquare,
+  Cpu
 } from 'lucide-react';
 import { apiService } from '@/services/api';
 
@@ -45,6 +48,27 @@ export function ServiceStatus() {
       status: 'unknown',
       description: '向量資料庫連接',
       icon: Database,
+      lastChecked: null
+    },
+    {
+      name: 'VLM服務',
+      status: 'unknown',
+      description: '視覺語言模型 (Ollama qwen3-vl)',
+      icon: Eye,
+      lastChecked: null
+    },
+    {
+      name: 'LLM服務',
+      status: 'unknown',
+      description: '大語言模型服務',
+      icon: MessageSquare,
+      lastChecked: null
+    },
+    {
+      name: '嵌入服務',
+      status: 'unknown',
+      description: '文字向量化服務',
+      icon: Cpu,
       lastChecked: null
     },
     {
@@ -88,6 +112,27 @@ export function ServiceStatus() {
             return {
               ...service,
               status: healthResponse.services?.database?.supabase ? 'healthy' : 'unhealthy',
+              lastChecked: now
+            };
+
+          case 'VLM服務':
+            return {
+              ...service,
+              status: healthResponse.services?.vlm_service?.available ? 'healthy' : 'unhealthy',
+              lastChecked: now
+            };
+
+          case 'LLM服務':
+            return {
+              ...service,
+              status: healthResponse.services?.llm_service?.available ? 'healthy' : 'unhealthy',
+              lastChecked: now
+            };
+
+          case '嵌入服務':
+            return {
+              ...service,
+              status: healthResponse.services?.embedding_service ? 'healthy' : 'unhealthy',
               lastChecked: now
             };
 
@@ -231,7 +276,9 @@ export function ServiceStatus() {
               <ul className="mt-1 text-blue-800 dark:text-blue-200 space-y-1">
                 <li>• 每30秒自動檢查服務狀態</li>
                 <li>• 點擊「刷新」按鈕可手動檢查</li>
-                <li>• 所有服務正常時系統才能完全使用</li>
+                <li>• VLM/LLM服務為可選，影響視覺處理功能</li>
+                <li>• 核心服務（API/資料庫）正常時基本功能可用</li>
+                <li>• 所有服務正常時系統功能最完整</li>
               </ul>
             </div>
           </div>

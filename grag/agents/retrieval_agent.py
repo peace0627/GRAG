@@ -96,60 +96,72 @@ class RetrievalAgent:
         return result
 
     async def _vector_search(self, query: str, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Perform vector similarity search"""
-        # This is a simplified implementation
-        # In production, you would:
-        # 1. Generate embedding for the query
-        # 2. Perform similarity search in Supabase pgvector
-        # 3. Return ranked results
-
+        """Perform vector similarity search using embeddings"""
         try:
-            # Placeholder: Get all vectors (in production, use similarity search)
-            client = self.db_manager.get_supabase_client()
+            # Import embedding service
+            from ..ingestion.indexing.embedding_service import EmbeddingService
 
-            # Build query based on parameters
-            supabase_query = client.table('vectors').select('*')
+            # Generate embedding for the query
+            embedding_service = EmbeddingService()
+            query_embedding = embedding_service.embed_single_text(query)
 
-            # Apply filters
-            if parameters.get('modality') == 'visual':
-                supabase_query = supabase_query.eq('type', 'vlm_region')
-            else:
-                supabase_query = supabase_query.eq('type', 'chunk')
+            if not query_embedding:
+                logger.error("Failed to generate query embedding")
+                return []
 
-            if parameters.get('document_id'):
-                supabase_query = supabase_query.eq('document_id', str(parameters['document_id']))
-
-            if parameters.get('temporal_filter'):
-                # Add temporal filtering logic here
-                pass
-
-            # Apply limit
+            # Perform similarity search
             top_k = parameters.get('top_k', 10)
-            supabase_query = supabase_query.limit(top_k)
+            threshold = parameters.get('similarity_threshold', 0.0)  # Set to 0.0 to return all results for debugging
 
-            response = supabase_query.execute()
+            logger.info(f"Vector search: query='{query[:50]}...', top_k={top_k}, threshold={threshold}")
+
+            similar_vectors = await self.db_manager.search_similar_vectors(
+                query_embedding=query_embedding,
+                limit=top_k,
+                threshold=threshold
+            )
+
+            logger.info(f"Vector search returned {len(similar_vectors)} results")
+            for i, vec in enumerate(similar_vectors[:3]):  # Log first 3 results
+                similarity = getattr(vec, 'similarity_score', 'N/A')
+                logger.info(f"  Result {i+1}: similarity={similarity}, vector_id={vec.vector_id}")
 
             results = []
-            for item in response.data:
-                results.append({
-                    'vector_id': item['vector_id'],
-                    'document_id': item['document_id'],
-                    'chunk_id': item.get('chunk_id'),
-                    'fact_id': item.get('fact_id'),
-                    'type': item['type'],
-                    'page': item['page'],
-                    'order': item['order'],
-                    'similarity_score': 0.8,  # Placeholder similarity score
-                    'content': self._get_content_preview(item),
-                    'metadata': item
-                })
+            for vector_record in similar_vectors:
+                # Apply additional filters
+                if not self._passes_filters(vector_record, parameters):
+                    continue
 
-            logger.info(f"Vector search returned {len(results)} results")
+                # Get content for this vector
+                content = await self._get_vector_content(vector_record)
+
+                result = {
+                    'vector_id': str(vector_record.vector_id),
+                    'document_id': str(vector_record.document_id),
+                    'chunk_id': str(vector_record.chunk_id) if vector_record.chunk_id else None,
+                    'fact_id': str(vector_record.fact_id) if vector_record.fact_id else None,
+                    'type': vector_record.type,
+                    'page': vector_record.page,
+                    'order': vector_record.order,
+                    'similarity_score': getattr(vector_record, 'similarity_score', 0.8),
+                    'content': content,
+                    'metadata': {
+                        'vector_id': str(vector_record.vector_id),
+                        'document_id': str(vector_record.document_id),
+                        'type': vector_record.type,
+                        'page': vector_record.page,
+                        'order': vector_record.order
+                    }
+                }
+
+                results.append(result)
+
+            logger.info(f"Vector search for query '{query[:50]}...' returned {len(results)} results")
             return results
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
-            raise
+            return []
 
     async def _graph_traversal(self, query: str, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Perform knowledge graph traversal"""
@@ -693,6 +705,58 @@ class RetrievalAgent:
         else:
             return "Content preview not available"
 
+    def _passes_filters(self, vector_record, parameters: Dict[str, Any]) -> bool:
+        """Check if vector record passes the specified filters"""
+        # Filter by modality
+        if parameters.get('modality') == 'visual' and vector_record.type != 'vlm_region':
+            return False
+        elif parameters.get('modality') == 'text' and vector_record.type != 'chunk':
+            return False
+
+        # Filter by document_id if specified
+        if parameters.get('document_id') and str(vector_record.document_id) != str(parameters['document_id']):
+            return False
+
+        return True
+
+    async def _get_vector_content(self, vector_record) -> str:
+        """Get the actual content for a vector record"""
+        try:
+            # For chunks, get content from Neo4j
+            if vector_record.chunk_id:
+                async with self.db_manager.neo4j_session() as session:
+                    result = await session.run(
+                        "MATCH (c:Chunk {chunk_id: $chunk_id}) RETURN c.text as content",
+                        chunk_id=str(vector_record.chunk_id)
+                    )
+                    record = await result.single()
+                    if record:
+                        return record['content']
+
+            # For visual facts, get description from Neo4j
+            elif vector_record.fact_id:
+                async with self.db_manager.neo4j_session() as session:
+                    result = await session.run(
+                        "MATCH (v:VisualFact {fact_id: $fact_id}) RETURN v.description as content",
+                        fact_id=str(vector_record.fact_id)
+                    )
+                    record = await result.single()
+                    if record:
+                        return record['content']
+
+            # Fallback to preview
+            return self._get_content_preview({
+                'type': vector_record.type,
+                'page': vector_record.page
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get content for vector {vector_record.vector_id}: {e}")
+            return self._get_content_preview({
+                'type': vector_record.type,
+                'page': vector_record.page
+            })
+
     def _extract_temporal_terms(self, query: str) -> List[str]:
         """Extract temporal keywords from query"""
         temporal_keywords = [
@@ -712,21 +776,50 @@ class RetrievalAgent:
         return found_terms
 
     async def collect_evidence(self, retrieval_result: RetrievalResult) -> List[Evidence]:
-        """Convert retrieval results to evidence objects"""
+        """Convert retrieval results to evidence objects with enhanced processing"""
         evidence_list = []
 
-        for result in retrieval_result.merged_results:
+        logger.info(f"Collecting evidence from retrieval result: vector_results={len(retrieval_result.vector_results or [])}, graph_results={len(retrieval_result.graph_results or [])}, merged_results={len(retrieval_result.merged_results or [])}")
+
+        # Use merged_results if available, otherwise combine vector and graph results
+        results_to_process = retrieval_result.merged_results
+        if not results_to_process:
+            # If no merged results, combine vector and graph results manually
+            results_to_process = []
+            results_to_process.extend(retrieval_result.vector_results or [])
+            results_to_process.extend(retrieval_result.graph_results or [])
+
+        logger.info(f"Processing {len(results_to_process)} results for evidence collection")
+
+        # Remove duplicates based on content similarity
+        unique_results = self._deduplicate_evidence(results_to_process)
+
+        logger.info(f"After deduplication: {len(unique_results)} unique results")
+
+        for result in unique_results:
+            # Determine confidence score based on available metrics
+            confidence = self._calculate_evidence_confidence(result)
+
+            # Get appropriate content based on result type
+            content = self._extract_evidence_content(result)
+
+            from uuid import uuid4
             evidence = Evidence(
-                evidence_id=str(UUID.uuid4()),
+                evidence_id=str(uuid4()),
                 source_type=result.get('source', 'unknown'),
-                content=result.get('content', str(result)),
-                confidence=result.get('combined_score', 0.5),
+                content=content,
+                confidence=confidence,
                 metadata={
                     'source': result.get('source'),
                     'similarity_score': result.get('similarity_score'),
                     'relevance_score': result.get('relevance_score'),
                     'entity_type': result.get('entity_type'),
-                    'relationship_types': result.get('relationship_types', [])
+                    'relationship_types': result.get('relationship_types', []),
+                    'final_score': result.get('final_score'),
+                    'vector_id': result.get('vector_id'),
+                    'document_id': result.get('document_id'),
+                    'chunk_id': result.get('chunk_id'),
+                    'fact_id': result.get('fact_id')
                 }
             )
 
@@ -738,4 +831,92 @@ class RetrievalAgent:
 
             evidence_list.append(evidence)
 
+        # Sort evidence by confidence (highest first)
+        evidence_list.sort(key=lambda x: x.confidence, reverse=True)
+
+        logger.info(f"Collected {len(evidence_list)} evidence items from retrieval results")
         return evidence_list
+
+    def _deduplicate_evidence(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove duplicate evidence based on content similarity"""
+        if not results:
+            return results
+
+        unique_results = []
+        seen_contents = set()
+
+        for result in results:
+            # Create a content signature for deduplication
+            content = result.get('content', '')
+            source = result.get('source', '')
+            doc_id = result.get('document_id', '')
+
+            # Create signature (content hash + source + document)
+            signature = f"{hash(content[:100])}|{source}|{doc_id}"
+
+            if signature not in seen_contents:
+                seen_contents.add(signature)
+                unique_results.append(result)
+
+        return unique_results
+
+    def _calculate_evidence_confidence(self, result: Dict[str, Any]) -> float:
+        """Calculate confidence score for evidence based on multiple factors"""
+        base_confidence = 0.5
+
+        # Use final_score if available (from merged results)
+        if 'final_score' in result:
+            base_confidence = result['final_score']
+
+        # Use combined_score if available
+        elif 'combined_score' in result:
+            base_confidence = result['combined_score']
+
+        # Use similarity_score for vector results
+        elif 'similarity_score' in result:
+            # 相似度分數通常是0-1之間，但cosine similarity可能是-1到1
+            # 確保轉換為0-1範圍的信心分數
+            similarity = result['similarity_score']
+            if similarity < 0:
+                # 負相似度轉換為低信心度
+                base_confidence = max(0.0, similarity + 1.0)  # -1 -> 0, 0 -> 1
+            else:
+                base_confidence = similarity
+
+        # Boost confidence based on source reliability
+        source_boost = {
+            'vector': 0.1,  # Vector search is generally reliable
+            'graph': 0.15,  # Graph relationships are highly reliable
+            'hybrid': 0.2   # Combined sources are most reliable
+        }
+
+        source = result.get('source', 'unknown')
+        boost = source_boost.get(source, 0.0)
+
+        final_confidence = min(base_confidence + boost, 1.0)
+        return max(final_confidence, 0.0)
+
+    def _extract_evidence_content(self, result: Dict[str, Any]) -> str:
+        """Extract appropriate content for evidence based on result type"""
+        # Use content field if available
+        if 'content' in result and result['content']:
+            return result['content']
+
+        # For graph results, construct content from available fields
+        if result.get('source') == 'graph':
+            if 'event' in result and result['event']:
+                event = result['event']
+                content = f"Event: {event.get('description', 'Unknown event')}"
+                if event.get('type'):
+                    content += f" (Type: {event['type']})"
+                return content
+
+            elif 'source_entity' in result and result['source_entity']:
+                entity = result['source_entity']
+                content = f"Entity: {entity.get('name', 'Unknown entity')}"
+                if entity.get('type'):
+                    content += f" (Type: {entity['type']})"
+                return content
+
+        # Fallback: convert result to string
+        return str(result)

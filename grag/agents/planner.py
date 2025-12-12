@@ -139,12 +139,18 @@ class QueryPlanner:
         analytical_keywords = ["為什麼", "如何", "比較", "分析", "原因", "why", "how", "compare", "analysis"]
         has_analytical = any(keyword in query_lower for keyword in analytical_keywords)
 
+        # Document structure indicators
+        structure_keywords = ["架構", "結構", "章節", "目錄", "組織", "structure", "chapter", "section", "toc", "table of contents", "analyze document", "document structure"]
+        has_structure = any(keyword in query_lower for keyword in structure_keywords)
+
         # Complex indicators
         complex_keywords = ["和", "與", "之間", "關係", "相關", "影響", "between", "relationship", "impact"]
         has_complex = any(keyword in query_lower for keyword in complex_keywords)
 
         # Determine query type
-        if has_visual:
+        if has_structure:
+            query_type = QueryType.DOCUMENT_STRUCTURE
+        elif has_visual:
             query_type = QueryType.VISUAL
         elif has_temporal:
             query_type = QueryType.TEMPORAL
@@ -239,6 +245,29 @@ class QueryPlanner:
                 )
             ]
 
+        elif query_type == QueryType.DOCUMENT_STRUCTURE:
+            # Document structure analysis queries
+            plan_steps = [
+                PlanStep(
+                    step_id="structure_analysis_1",
+                    description="Analyze document structure and organization",
+                    tool_type=ToolType.DOCUMENT_STRUCTURE_ANALYSIS,
+                    parameters={"analysis_type": "extract_structure"}
+                ),
+                PlanStep(
+                    step_id="toc_generation",
+                    description="Generate table of contents",
+                    tool_type=ToolType.DOCUMENT_STRUCTURE_ANALYSIS,
+                    parameters={"analysis_type": "generate_toc"}
+                ),
+                PlanStep(
+                    step_id="key_elements_extraction",
+                    description="Identify key elements and components",
+                    tool_type=ToolType.DOCUMENT_STRUCTURE_ANALYSIS,
+                    parameters={"analysis_type": "identify_key_elements"}
+                )
+            ]
+
         elif query_type == QueryType.COMPLEX:
             # Complex queries - full pipeline with reflection
             plan_steps = [
@@ -287,7 +316,7 @@ class QueryPlanner:
 
         # Check for tool availability (placeholder - will be enhanced)
         required_tools = set(step.tool_type for step in plan)
-        available_tools = {ToolType.VECTOR_SEARCH, ToolType.GRAPH_TRAVERSAL, ToolType.VLM_RERUN}
+        available_tools = {ToolType.VECTOR_SEARCH, ToolType.GRAPH_TRAVERSAL, ToolType.VLM_RERUN, ToolType.DOCUMENT_STRUCTURE_ANALYSIS}
 
         if not required_tools.issubset(available_tools):
             missing_tools = required_tools - available_tools

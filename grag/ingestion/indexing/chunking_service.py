@@ -54,6 +54,28 @@ class ChunkingService:
             List of chunk dictionaries with content and metadata
         """
         try:
+            text_length = len(text)
+            logger.info(f"Chunking text of length {text_length} with chunk_size={self.chunk_size}")
+
+            # If text is shorter than chunk_size, create single chunk
+            if text_length <= self.chunk_size:
+                chunk_id = uuid4()
+                chunk_data = {
+                    "chunk_id": chunk_id,
+                    "document_id": document_id,
+                    "content": text,
+                    "order": 0,
+                    "metadata": {
+                        "chunk_size": text_length,
+                        "source_document": str(document_id),
+                        "processing_method": "single_chunk"
+                    },
+                    "relations": []
+                }
+                logger.info(f"Text shorter than chunk_size, created single chunk")
+                return [chunk_data]
+
+            # For longer texts, use LlamaIndex splitter
             # Create LlamaIndex Document
             doc = Document(
                 text=text,
@@ -67,18 +89,21 @@ class ChunkingService:
             # Process document
             nodes = splitter.get_nodes_from_documents([doc])
 
+            logger.info(f"LlamaIndex splitter created {len(nodes)} nodes")
+
             # Convert to our format
             chunks = []
             for i, node in enumerate(nodes):
                 chunk_id = uuid4()  # Generate unique chunk ID
+                chunk_content = node.get_content()
 
                 chunk_data = {
                     "chunk_id": chunk_id,
                     "document_id": document_id,
-                    "content": node.get_content(),
+                    "content": chunk_content,
                     "order": i,
                     "metadata": {
-                        "chunk_size": len(node.get_content()),
+                        "chunk_size": len(chunk_content),
                         "source_document": str(document_id),
                         "processing_method": "llamaindex"
                     },
@@ -87,12 +112,62 @@ class ChunkingService:
 
                 chunks.append(chunk_data)
 
+            # If still only one chunk, force split by character count
+            if len(chunks) == 1 and text_length > self.chunk_size * 2:
+                logger.warning(f"LlamaIndex only created 1 chunk for {text_length} chars, force splitting")
+                chunks = self._force_split_text(text, document_id, metadata)
+
             logger.info(f"Successfully chunked document {document_id} into {len(chunks)} chunks")
             return chunks
 
         except Exception as e:
             logger.error(f"Failed to chunk text: {e}")
             raise Exception(f"Text chunking failed: {e}")
+
+    def _force_split_text(self, text: str, document_id: UUID, metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Force split text by character count when LlamaIndex fails"""
+        chunks = []
+        text_length = len(text)
+        chunk_size = self.chunk_size
+        overlap = self.chunk_overlap
+
+        start = 0
+        chunk_order = 0
+
+        while start < text_length:
+            end = min(start + chunk_size, text_length)
+
+            # Try to find a good break point (sentence end)
+            if end < text_length:
+                # Look for sentence endings within the last 100 chars
+                search_start = max(start + chunk_size - 100, start)
+                sentence_end = text.rfind('.', search_start, end)
+                if sentence_end != -1:
+                    end = sentence_end + 1
+
+            chunk_content = text[start:end]
+            if chunk_content.strip():  # Only add non-empty chunks
+                chunk_id = uuid4()
+                chunk_data = {
+                    "chunk_id": chunk_id,
+                    "document_id": document_id,
+                    "content": chunk_content,
+                    "order": chunk_order,
+                    "metadata": {
+                        "chunk_size": len(chunk_content),
+                        "source_document": str(document_id),
+                        "processing_method": "force_split"
+                    },
+                    "relations": []
+                }
+                chunks.append(chunk_data)
+                chunk_order += 1
+
+            # Move start position with overlap
+            start = end - overlap if overlap > 0 else end
+
+        logger.info(f"Force split created {len(chunks)} chunks")
+        return chunks
 
     def chunk_vlm_output(self,
                         vlm_output,
@@ -111,15 +186,23 @@ class ChunkingService:
 
             if hasattr(vlm_output, 'ocr_text') and vlm_output.ocr_text:
                 # Use main OCR text for chunking
-                text_chunks = self.chunk_text(
-                    text=vlm_output.ocr_text,
-                    document_id=UUID(vlm_output.file_id) if isinstance(vlm_output.file_id, str) else vlm_output.file_id,
-                    metadata={"vlm_processed": True, **(metadata or {})}
-                )
-                chunks.extend(text_chunks)
+                text = vlm_output.ocr_text.strip()
+                if len(text) > 0:
+                    logger.info(f"Chunking VLM output text of length {len(text)} with chunk_size={self.chunk_size}")
+
+                    text_chunks = self.chunk_text(
+                        text=text,
+                        document_id=UUID(vlm_output.file_id) if isinstance(vlm_output.file_id, str) else vlm_output.file_id,
+                        metadata={"vlm_processed": True, **(metadata or {})}
+                    )
+                    chunks.extend(text_chunks)
+                    logger.info(f"Created {len(text_chunks)} text chunks from VLM output")
+                else:
+                    logger.warning("VLM output has empty ocr_text")
 
             # Add visual regions as separate chunks if enabled and informative
             if self.include_visual_chunks and hasattr(vlm_output, 'regions'):
+                visual_chunks_created = 0
                 for region in vlm_output.regions:
                     if region.confidence > 0.8 and len(region.description) > 100:
                         # Create additional chunk for significant visual regions
@@ -140,8 +223,12 @@ class ChunkingService:
                             "relations": []
                         }
                         chunks.append(chunk_data)
+                        visual_chunks_created += 1
 
-            logger.info(f"Successfully chunked VLM output into {len(chunks)} chunks")
+                if visual_chunks_created > 0:
+                    logger.info(f"Created {visual_chunks_created} visual chunks from VLM regions")
+
+            logger.info(f"Successfully chunked VLM output into {len(chunks)} total chunks")
             return chunks
 
         except Exception as e:

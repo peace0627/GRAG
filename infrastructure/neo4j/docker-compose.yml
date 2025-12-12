@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   neo4j:
-    image: neo4j:5.0
+    image: neo4j:5.23
     container_name: neo4j-grag
     ports:
       - "7474:7474"   # HTTP browser interface
@@ -16,6 +16,7 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+      - ./setup-indexes.cypher:/setup-indexes.cypher
     networks:
       - grag-network
     healthcheck:

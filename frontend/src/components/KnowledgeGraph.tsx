@@ -47,15 +47,14 @@ export function KnowledgeGraph({ queryResult, isExpanded, onToggle }: KnowledgeG
   const fetchGraphData = async () => {
     setLoading(true);
     try {
-      // 從文檔列表生成圖譜數據
-      const documentsResponse = await apiService.listDocuments(50, 0);
-
-      if (documentsResponse.success && documentsResponse.documents.length > 0) {
-        // 將文檔數據轉換為圖譜格式
-        const graphData = await convertDocumentsToGraphData(documentsResponse.documents);
+      // 直接從後端API獲取知識圖譜數據
+      const response = await fetch('http://localhost:8000/graph');
+      if (response.ok) {
+        const graphData = await response.json();
         setGraphData(graphData);
       } else {
-        // 如果沒有文檔，使用空的圖譜
+        console.error('Failed to fetch graph data from API:', response.status, response.statusText);
+        // 如果API失敗，使用空的圖譜
         setGraphData({ nodes: [], edges: [] });
       }
     } catch (error) {
@@ -431,7 +430,7 @@ export function KnowledgeGraph({ queryResult, isExpanded, onToggle }: KnowledgeG
               <span>文本片段</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4-4 bg-violet-500 rounded"></div>
+              <div className="w-4 h-4 bg-violet-500 rounded"></div>
               <span>視覺事實</span>
             </div>
           </div>

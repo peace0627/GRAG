@@ -14,6 +14,7 @@ class QueryType(str, Enum):
     VISUAL = "visual"           # Questions requiring visual evidence
     TEMPORAL = "temporal"       # Time-based questions
     COMPLEX = "complex"         # Multi-step reasoning required
+    DOCUMENT_STRUCTURE = "document_structure"  # Document structure analysis
 
 
 class ToolType(str, Enum):
@@ -23,6 +24,7 @@ class ToolType(str, Enum):
     VLM_RERUN = "vlm_rerun"
     OCR_PROCESS = "ocr_process"
     TEXT_CHUNK = "text_chunk"
+    DOCUMENT_STRUCTURE_ANALYSIS = "document_structure_analysis"
 
 
 class Evidence(BaseModel):
@@ -95,7 +97,7 @@ class RetrievalResult(BaseModel):
     vector_results: List[Dict[str, Any]] = Field(default_factory=list)
     graph_results: List[Dict[str, Any]] = Field(default_factory=list)
     merged_results: List[Dict[str, Any]] = Field(default_factory=list)
-    execution_time: float
+    execution_time: float = Field(default=0.0)
 
 
 class ReasoningResult(BaseModel):

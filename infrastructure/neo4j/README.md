@@ -149,6 +149,28 @@ docker volume rm $(docker volume ls -q | grep neo4j)
 docker-compose up -d neo4j
 ```
 
+## 🔍 設定 Fulltext Indexes
+
+Neo4j 需要 fulltext indexes 來進行高效的文字搜尋。啟動 Neo4j 後，請執行以下命令來建立必要的索引：
+
+```bash
+# 進入專案目錄
+cd /path/to/grag/project
+
+# 執行索引設定腳本
+docker-compose exec neo4j cypher-shell -u neo4j -p testpass123 -f /setup-indexes.cypher
+
+# 或者手動執行 (複製貼上 setup-indexes.cypher 的內容)
+docker-compose exec neo4j cypher-shell -u neo4j -p testpass123
+```
+
+### 建立的索引包括：
+- `entityNameIndex`: 實體名稱搜尋
+- `eventIndex`: 事件描述搜尋
+- `visualFactIndex`: 視覺事實描述搜尋
+- `chunkContentIndex`: 文件區塊內容搜尋
+- `documentIndex`: 文件標題和路徑搜尋
+
 ## 🧪 測試連接
 
 運行專案中的連線測試：

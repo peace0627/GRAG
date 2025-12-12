@@ -43,6 +43,15 @@ class LLMFactory:
                 api_key=config.ollama_api_key,
                 base_url=config.ollama_base_url
             )
+        elif provider == "groq":
+            # Groq uses OpenAI-compatible API
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=config.openai_api_key,  # User's Grok key is in OPENAI_API_KEY
+                base_url="https://api.groq.com/openai/v1"
+            )
         elif provider in ["vllm", "lmstudio", "custom"]:
             # Generic OpenAI-compatible API
             return ChatOpenAI(

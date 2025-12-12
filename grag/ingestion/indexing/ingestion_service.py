@@ -1,6 +1,7 @@
 """Data ingestion service for end-to-end document processing pipeline"""
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import UUID, uuid4
@@ -21,6 +22,181 @@ logger = logging.getLogger(__name__)
 
 class IngestionService:
     """End-to-end document ingestion pipeline"""
+
+    @staticmethod
+    def generate_smart_title(file_path: Path, content: str = "", max_length: int = 80) -> str:
+        """Generate a meaningful title from file path and content
+
+        Args:
+            file_path: Original file path
+            content: Extracted content (optional)
+            max_length: Maximum title length
+
+        Returns:
+            Smart title for the document
+        """
+        # Start with filename and clean it
+        filename = file_path.stem
+
+        # Remove common temporary prefixes
+        filename = re.sub(r'^(tmp|temp|upload)_?', '', filename, flags=re.IGNORECASE)
+        filename = re.sub(r'^[a-f0-9]{8,}_?', '', filename)  # Remove UUID-like prefixes
+
+        # Clean up filename
+        filename = filename.replace('_', ' ').replace('-', ' ').strip()
+
+        # Check if content is fallback/placeholder content
+        content_clean = content.strip() if content else ""
+        is_fallback_content = (
+            'fallback' in content_clean.lower() or
+            'content extraction failed' in content_clean.lower() or
+            content_clean.startswith('PDF Document') or
+            content_clean.startswith('Document:') or
+            len(content_clean) < 20  # Too short to be meaningful
+        )
+
+        # If we have meaningful content (not fallback), try to extract title from it
+        if content_clean and len(content_clean) > 50 and not is_fallback_content:
+            # Extract first meaningful sentence or phrase
+            sentences = re.split(r'[.!?]\s+', content_clean[:500])  # First 500 chars
+
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) > 15 and len(sentence) < 120:  # Reasonable title length
+                    # Check if it looks like a meaningful title
+                    if (sentence[0].isupper() and
+                        len(sentence.split()) >= 3 and  # At least 3 words
+                        not sentence.lower().startswith(('the ', 'a ', 'an ', 'this ', 'these '))):
+                        # Clean up the title
+                        title = sentence[:max_length]
+                        # Remove trailing punctuation that might make it look incomplete
+                        title = re.sub(r'[,;:-]$', '', title.strip())
+                        return title
+
+            # If no good sentence found, extract meaningful keywords
+            # Remove common stop words and get key phrases
+            stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were'}
+            words = [w for w in content_clean.split()[:15] if w.lower() not in stop_words and len(w) > 2]
+
+            if len(words) >= 3:
+                title = ' '.join(words[:8])  # Use first 8 meaningful words
+                if len(title) > max_length:
+                    title = title[:max_length].rsplit(' ', 1)[0]
+                return title.capitalize()
+
+        # Fallback to cleaned filename with better formatting
+        if filename:
+            # Try to make it more readable and meaningful
+            # Handle common patterns like "Project_Report_2024" -> "Project Report 2024"
+            words = re.findall(r'[A-Z][a-z]*|[a-z]+|\d+', filename)
+
+            if len(words) > 1:
+                # Capitalize each word and join
+                title = ' '.join(word.capitalize() for word in words)
+            else:
+                title = filename.capitalize()
+
+            # Add file extension context for clarity
+            ext = file_path.suffix.upper()
+            if ext == '.PDF':
+                title = f"{title} (PDF)"
+            elif ext == '.DOCX':
+                title = f"{title} (Word)"
+            elif ext == '.TXT':
+                title = f"{title} (Text)"
+            elif ext == '.MD':
+                title = f"{title} (Markdown)"
+
+            if len(title) > max_length:
+                title = title[:max_length-3] + '...'
+
+            return title
+
+        # Final fallback with file type
+        ext = file_path.suffix.upper() or 'FILE'
+        return f"Document ({ext})"
+
+    @staticmethod
+    async def generate_llm_smart_title(file_path: Path, content: str = "", max_length: int = 80) -> str:
+        """Generate intelligent title using LLM analysis of document content
+
+        Args:
+            file_path: Original file path
+            content: Extracted content (optional)
+            max_length: Maximum title length
+
+        Returns:
+            LLM-generated smart title for the document
+        """
+        try:
+            from grag.core.llm_factory import LLMFactory
+            from langchain_core.messages import HumanMessage
+
+            # Prepare content sample for LLM analysis
+            content_sample = content.strip()[:1500] if content else ""  # Use first 1500 chars
+
+            # Skip LLM generation if content is too short or is fallback content
+            is_fallback_content = (
+                'fallback' in content.lower() or
+                'content extraction failed' in content.lower() or
+                content.startswith('PDF Document') or
+                content.startswith('Document:') or
+                len(content.strip()) < 50  # Too short for meaningful analysis
+            )
+
+            if not content_sample or is_fallback_content:
+                # Fallback to rule-based title generation
+                return IngestionService.generate_smart_title(file_path, content, max_length)
+
+            # Create LLM prompt for title generation
+            filename = file_path.name
+
+            prompt = f"""分析這份文檔的內容，為其生成一個簡潔但信息豐富的標題。
+
+文件名: {filename}
+內容樣本: {content_sample}
+
+要求:
+1. 突出主要主題、設備名稱或核心內容
+2. 包含關鍵識別信息（如批准號、公司名、產品名）
+3. 如果是醫療/FDA相關文檔，提及關鍵醫療術語
+4. 長度控制在{max_length // 2}個字符內（約{max_length // 6}個中文字）
+5. 使用專業但易懂的語言
+6. 標題應該能夠幫助用戶快速識別文檔內容
+
+請只返回標題，不要包含其他解釋或標點符號。
+
+生成標題："""
+
+            # Get LLM instance and generate title
+            llm = LLMFactory.create_default_llm()
+            response = await llm.ainvoke([HumanMessage(content=prompt)])
+
+            llm_title = response.content.strip()
+
+            # Clean up the title
+            # Remove quotes if present
+            llm_title = llm_title.strip('"').strip("'").strip()
+
+            # Remove common prefixes that LLM might add
+            llm_title = re.sub(r'^(標題|Title|Document Title)[:\-]?\s*', '', llm_title, flags=re.IGNORECASE)
+
+            # Ensure reasonable length
+            if len(llm_title) > max_length:
+                # Try to cut at word boundary
+                llm_title = llm_title[:max_length-3] + "..."
+
+            # Final validation - ensure we have a meaningful title
+            if len(llm_title.strip()) < 5:
+                # Fallback if LLM generated something too short
+                return IngestionService.generate_smart_title(file_path, content, max_length)
+
+            return llm_title
+
+        except Exception as e:
+            logger.warning(f"LLM title generation failed: {e}, falling back to rule-based generation")
+            # Fallback to rule-based title generation
+            return IngestionService.generate_smart_title(file_path, content, max_length)
 
     def __init__(self):
         """Initialize ingestion service using environment configuration"""
@@ -74,10 +250,18 @@ class IngestionService:
 
             # Step 1: Load document with LangChain
             logger.info("Step 1/5: LangChain document loading")
-            langchain_docs = await self.langchain_loader.load_document(file_path)
-
-            combined_text = self.langchain_loader.combine_documents(langchain_docs)
-            logger.info(f"Loaded document content: {len(combined_text)} characters from {len(langchain_docs)} chunks")
+            try:
+                langchain_docs = await self.langchain_loader.load_document(file_path)
+                combined_text = self.langchain_loader.combine_documents(langchain_docs)
+                logger.info(f"Loaded document content: {len(combined_text)} characters from {len(langchain_docs)} chunks")
+            except Exception as load_error:
+                logger.warning(f"LangChain document loading failed: {load_error}")
+                # Create fallback document with file path as content
+                from langchain_core.documents import Document as LangchainDocument
+                fallback_content = f"Document: {file_path.name}\nPath: {file_path}\nNote: Content extraction failed due to format incompatibility."
+                langchain_docs = [LangchainDocument(page_content=fallback_content)]
+                combined_text = fallback_content
+                logger.info(f"Using fallback content: {len(combined_text)} characters")
 
             # Step 2: Decide processing strategy
             file_ext = file_path.suffix.lower()
@@ -126,6 +310,10 @@ class IngestionService:
                 processing_layer == "VLM" or
                 (processing_layer in ["MINERU", "OCR", "FALLBACK_TEXT_PROCESSING"] and use_vlm == True)  # VLM was attempted but VLM service not available
             )
+
+            # Assess content quality
+            content_quality = self._assess_content_quality(vlm_output, enriched_chunks)
+            vlm_actually_successful = vlm_actually_successful and content_quality["is_acceptable"]
 
             result = {
                 "success": True,
@@ -600,10 +788,23 @@ class IngestionService:
         try:
             from datetime import datetime
 
+            # Generate LLM-smart title for the document
+            file_path = Path(data["file_path"])
+            # Try to get content from chunks for title generation
+            sample_content = ""
+            if data.get("chunks") and len(data["chunks"]) > 0:
+                # Use first chunk content for title generation
+                first_chunk = data["chunks"][0]
+                if isinstance(first_chunk, dict) and "content" in first_chunk:
+                    sample_content = first_chunk["content"][:1500]  # Use more content for LLM analysis
+
+            # Try LLM-generated title first, fallback to rule-based if it fails
+            smart_title = await self.generate_llm_smart_title(file_path, sample_content)
+
             # Create Document node using synchronous method
             doc_data = {
                 "document_id": data["file_id"],
-                "title": Path(data["file_path"]).name,
+                "title": smart_title,  # Use smart title instead of filename
                 "source_path": data["file_path"],
                 "hash": "",
                 "created_at": datetime.now().isoformat(),
@@ -626,6 +827,10 @@ class IngestionService:
                 if chunk_result.get("success"):
                     chunks_created += 1
 
+                    # Update chunk with vector_id if available
+                    if "vector_id" in chunk:
+                        await self._update_chunk_vector_id(chunk["chunk_id"], chunk["vector_id"])
+
             return {
                 "success": True,
                 "document_created": 1,
@@ -638,21 +843,56 @@ class IngestionService:
             logger.error(f"Neo4j ingestion failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def _update_chunk_vector_id(self, chunk_id, vector_id):
+        """Update a chunk node with its vector_id"""
+        try:
+            # Use synchronous Neo4j driver for this update
+            from neo4j import GraphDatabase
+
+            driver = GraphDatabase.driver(
+                self.db_manager.neo4j_uri,
+                auth=(self.db_manager.neo4j_user, self.db_manager.neo4j_password)
+            )
+
+            with driver.session() as session:
+                session.run("""
+                MATCH (c:Chunk {chunk_id: $chunk_id})
+                SET c.vector_id = $vector_id
+                """,
+                chunk_id=str(chunk_id),
+                vector_id=str(vector_id)
+                )
+
+            driver.close()
+            logger.info(f"Updated chunk {chunk_id} with vector_id {vector_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to update chunk {chunk_id} with vector_id: {e}")
+
     async def _ingest_pgvector(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Ingest vector data into pgvector using async methods"""
         try:
             from grag.core.schemas.pgvector_schemas import VectorInsert
-            from uuid import uuid4
+            from uuid import UUID
 
             vectors_ingested = 0
 
             for vector_data in data["vectors"]:
+                # Convert string IDs to UUID objects as required by VectorInsert
+                try:
+                    document_id = UUID(vector_data["document_id"]) if isinstance(vector_data["document_id"], str) else vector_data["document_id"]
+                    chunk_id = UUID(vector_data["chunk_id"]) if vector_data.get("chunk_id") and isinstance(vector_data["chunk_id"], str) else vector_data.get("chunk_id")
+                    fact_id = UUID(vector_data["fact_id"]) if vector_data.get("fact_id") and isinstance(vector_data["fact_id"], str) else vector_data.get("fact_id")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid UUID format in vector data: {e}, skipping vector")
+                    continue
+
                 # Convert to VectorInsert format
                 vector_insert = VectorInsert(
                     embedding=vector_data["embedding"],
-                    document_id=vector_data["document_id"],
-                    chunk_id=vector_data.get("chunk_id"),
-                    fact_id=None,  # For future use
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    fact_id=fact_id,
                     type=vector_data["type"],
                     page=vector_data["page"],
                     order=vector_data["order"]
@@ -662,7 +902,10 @@ class IngestionService:
                 vector_id = await self.db_manager.insert_vector_record(vector_insert)
                 if vector_id:
                     vectors_ingested += 1
+                else:
+                    logger.warning(f"Failed to insert vector record for chunk {chunk_id}")
 
+            logger.info(f"Successfully ingested {vectors_ingested}/{len(data['vectors'])} vectors to pgvector")
             return {
                 "success": True,
                 "vectors_ingested": vectors_ingested,
@@ -986,5 +1229,63 @@ class IngestionService:
             assessment["relation_quality"] * weights["relation_quality"] +
             assessment["diversity_score"] * weights["diversity_score"]
         )
+
+        return assessment
+
+    def _assess_content_quality(self, vlm_output, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Assess the quality of extracted content to determine if processing was successful"""
+        assessment = {
+            "is_acceptable": True,
+            "quality_score": 0.8,
+            "total_characters": 0,
+            "issues": [],
+            "recommendations": []
+        }
+
+        # Calculate total characters extracted
+        total_chars = 0
+        for chunk in chunks:
+            content = chunk.get("content", "")
+            total_chars += len(content)
+
+        assessment["total_characters"] = total_chars
+
+        # Quality assessment criteria
+        if total_chars < 100:
+            assessment["is_acceptable"] = False
+            assessment["quality_score"] = 0.2
+            assessment["issues"].append("insufficient_content")
+            assessment["recommendations"].append("Content extraction yielded very little text (<100 chars)")
+        elif total_chars < 500:
+            assessment["quality_score"] = 0.5
+            assessment["issues"].append("limited_content")
+            assessment["recommendations"].append("Content extraction yielded limited text (<500 chars)")
+        elif total_chars > 5000:
+            assessment["quality_score"] = 0.9
+            assessment["recommendations"].append("High-quality content extraction")
+
+        # Check if content appears to be just basic metadata/titles
+        if chunks:
+            first_chunk_content = chunks[0].get("content", "").lower()
+            basic_indicators = ["content:", "document", "file", "pdf", "page"]
+
+            basic_content_score = 0
+            for indicator in basic_indicators:
+                if indicator in first_chunk_content:
+                    basic_content_score += 0.2
+
+            if basic_content_score > 0.4:  # More than 2 basic indicators
+                assessment["is_acceptable"] = False
+                assessment["quality_score"] = min(assessment["quality_score"], 0.3)
+                assessment["issues"].append("basic_metadata_only")
+                assessment["recommendations"].append("Only extracted basic metadata/titles, not actual content")
+
+        # Check for repetitive or low-information content
+        if len(chunks) > 1:
+            contents = [chunk.get("content", "") for chunk in chunks]
+            unique_contents = set(contents)
+            if len(unique_contents) < len(chunks) * 0.5:  # Less than 50% unique content
+                assessment["quality_score"] *= 0.8
+                assessment["issues"].append("repetitive_content")
 
         return assessment
