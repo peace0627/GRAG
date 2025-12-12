@@ -96,6 +96,7 @@
   - [x] config/todos.md - 記錄階段13完成情況
   - [x] config/history.md - 記錄向量搜索修復歷程
   - [x] config/progress.md - 更新進度追蹤
+- [x] **前端顯示修復**: 修復API list_documents端點硬編碼問題，實現真實處理結果顯示
 - [ ] 檢查 requirements.txt 無未使用套件
 - [ ] 驗證所有配置都在 .env 管理
 - [ ] 確保程式結構使用 Pydantic 控制

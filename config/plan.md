@@ -40,13 +40,23 @@
 - 📈 **處理時間**: 81秒 → 5.5秒 (-93%)
 - 📈 **分塊品質**: 1個無意義分塊 → 4個有意義分塊
 
-### 階段 4: LlamaIndex 集成 (LlamaIndex Integration)
-1. 文本分塊 (Text Chunking) 服務
-2. 統一嵌入 (Unified Embedding) 服務
-   - Text embeddings
-   - Visual embeddings
-3. 三元組提取 (Triple Extraction) from text and visual
-4. 區塊/事實匯入 Pipeline 到 Neo4j
+### 階段 4: LlamaIndex + LLM知識提取集成 ✅ 已完成
+1. **文本分塊 (Text Chunking) 服務** ✅
+   - LlamaIndex SentenceSplitter 實現
+   - 智慧分塊策略和元數據
+2. **統一嵌入 (Unified Embedding) 服務** ✅
+   - SentenceTransformers text embeddings
+   - 向量維度管理和品質控制
+3. **LLM驅動知識提取 (LLM-powered Knowledge Extraction)** ⭐ **新增實現**
+   - ✅ GPT-4實體提取器 (LLMKnowledgeExtractor)
+   - ✅ 結構化JSON提示工程
+   - ✅ Entity/Event/Relation自動生成
+   - ✅ 健壯的錯誤處理和降級機制
+   - ✅ 與現有規則提取器完全相容
+4. **區塊/事實匯入 Pipeline 到 Neo4j** ✅
+   - 知識圖譜節點創建 (Entity, Event, VisualFact)
+   - 關係建立 (MENTIONED_IN, PARTICIPATES_IN)
+   - 同步刪除邏輯實現
 
 ### 階段 5: 知識圖譜引擎 (Knowledge Graph Engine)
 1. Neo4j 驅動和連接管理 (.env)

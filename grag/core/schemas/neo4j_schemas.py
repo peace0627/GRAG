@@ -20,6 +20,15 @@ class DocumentNode(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
+    # Processing result fields
+    processing_method: Optional[str] = Field(None, description="Processing method used (PyMuPDF, VLM, MinerU, OCR)")
+    processing_quality: Optional[str] = Field(None, description="Processing quality level (高品質, 中品質, 低品質)")
+    content_quality_score: Optional[float] = Field(None, description="Content quality score (0.0-1.0)")
+    vlm_provider: Optional[str] = Field(None, description="VLM provider used (ollama, openai, etc.)")
+    vlm_success: Optional[bool] = Field(None, description="Whether VLM processing was successful")
+    total_characters: Optional[int] = Field(None, description="Total characters extracted")
+    processing_layer: Optional[str] = Field(None, description="Final processing layer used")
+
 
 class ChunkNode(BaseModel):
     """Text chunk node from document chunking"""

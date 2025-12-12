@@ -145,15 +145,33 @@ async def upload_single_file(
                 processing_quality = "中品質"
                 content_quality_score = 0.6
 
+            # Determine processing method based on processing_layer
+            processing_layer = strategy.get("processing_layer", "").lower()
+            if processing_layer == "pymupdf":
+                processing_method = "PyMuPDF"
+                vlm_provider = "PyMuPDF"  # For PyMuPDF, set provider to PyMuPDF
+            elif processing_layer == "vlm":
+                processing_method = "VLM"
+                vlm_provider = strategy.get("vlm_provider", "unknown")
+            elif processing_layer in ["mineru", "ocr"]:
+                processing_method = processing_layer.upper()
+                vlm_provider = processing_layer.upper()
+            elif processing_layer == "fallback_text_processing":
+                processing_method = "文字處理"
+                vlm_provider = "TextFallback"
+            else:
+                processing_method = "VLM" if strategy.get("vlm_used") else "文字處理"
+                vlm_provider = strategy.get("vlm_provider", "unknown")
+
             return {
                 "success": True,
                 "message": f"File '{file.filename}' processed successfully",
                 "document_id": result.get("file_id"),
                 "processing_time": result.get("processing_time"),
-                "processing_method": "VLM" if strategy.get("vlm_used") else "文字處理",
+                "processing_method": processing_method,
                 "processing_quality": processing_quality,
                 "content_quality_score": content_quality_score,
-                "vlm_provider": strategy.get("vlm_provider"),
+                "vlm_provider": vlm_provider,  # Use the processed vlm_provider
                 "vlm_success": strategy.get("vlm_success"),
                 "total_characters": statistics.get("total_characters", 0),
                 "data": result
@@ -320,23 +338,31 @@ async def list_documents(limit: int = 50, offset: int = 0):
         db_manager = get_database_manager()
         await db_manager.initialize()
 
-        # Query documents from Neo4j with enhanced information
+        # Query documents from Neo4j with enhanced processing information
         raw_documents = await db_manager.list_documents(limit=limit, offset=offset)
         await db_manager.close()
 
-        # Enhance documents with processing method information
+        # Enhance documents with processing method information from database
         enhanced_documents = []
         for doc in raw_documents["documents"]:
-            # Get processing information from recent upload results
-            # This is a simplified approach - in production, store this in database
-            processing_method = "VLM"  # Default
-            processing_quality = "高品質"
-            content_quality_score = 0.8
-            vlm_provider = "ollama"
-            vlm_success = True
-            total_characters = doc.get("chunk_count", 0) * 500  # Estimate
+            # Read actual processing information from Neo4j Document node
+            processing_method = doc.get("processing_method", "未知")
+            processing_quality = doc.get("processing_quality", "未知")
+            content_quality_score = doc.get("content_quality_score", 0.5)
+            vlm_provider = doc.get("vlm_provider", "未知")
+            vlm_success = doc.get("vlm_success", False)
+            total_characters = doc.get("total_characters", 0)
+            processing_layer = doc.get("processing_layer", "未知")
 
-            # Create enhanced document info
+            # Map processing_layer to processing_method for better display
+            if processing_layer == "PyMuPDF":
+                processing_method = "PyMuPDF"
+            elif processing_layer in ["VLM", "MinerU", "OCR"]:
+                processing_method = processing_layer
+            elif processing_layer == "FALLBACK_TEXT_PROCESSING":
+                processing_method = "文字處理"
+
+            # Create enhanced document info with real database values
             doc_info = DocumentInfo(
                 document_id=doc["document_id"],
                 title=doc["title"],
@@ -529,20 +555,17 @@ async def simple_rag_query(request: QueryRequest) -> QueryResponse:
 
 @app.get("/graph")
 async def get_knowledge_graph(limit: int = 100):
-    """獲取知識圖譜數據用於前端視覺化"""
+    """獲取完整的知識圖譜數據用於前端視覺化"""
     try:
         db_manager = get_database_manager()
         await db_manager.initialize()
 
-        # 獲取所有Document節點
-        documents = await db_manager.list_documents(limit=limit, offset=0)
-
         nodes = []
         edges = []
 
-        # 添加Document節點 - 使用智能標籤
+        # 1. 添加Document節點
+        documents = await db_manager.list_documents(limit=limit, offset=0)
         for doc in documents["documents"]:
-            # 生成更有意義的標籤
             smart_label = doc["title"]
             if smart_label and len(smart_label) > 50:
                 smart_label = smart_label[:47] + "..."
@@ -550,7 +573,7 @@ async def get_knowledge_graph(limit: int = 100):
             nodes.append({
                 "id": doc["document_id"],
                 "label": smart_label or f"Document {doc['document_id'][:8]}",
-                "type": "entity",
+                "type": "entity",  # Document作為實體顯示
                 "properties": {
                     "description": f"上傳時間: {datetime.fromisoformat(doc['created_at'].replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')}",
                     "chunk_count": doc["chunk_count"],
@@ -559,64 +582,191 @@ async def get_knowledge_graph(limit: int = 100):
                 }
             })
 
-        # 獲取Document-Chunk關係
-        for doc in documents["documents"]:
-            doc_id = doc["document_id"]
+        # 2. 添加Chunk節點和Document-Chunk關係
+        async with db_manager.neo4j_session() as session:
+            # 查詢所有chunks
+            result = await session.run("""
+            MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+            RETURN d.document_id as doc_id, c.chunk_id as chunk_id, c.text as text, c.vector_id as vector_id
+            LIMIT $limit
+            """, limit=limit * 10)  # 每個文檔最多10個chunks
 
-            # 查詢這個文檔的chunks
+            records = await result.fetch(limit * 10)
+
+            for record in records:
+                chunk_id = str(record["chunk_id"])
+                chunk_text = record["text"] or ""
+
+                # 生成智能標籤
+                if chunk_text and len(chunk_text.strip()) > 10:
+                    label_text = chunk_text.strip()[:50]
+                    if label_text.lower().startswith(('pdf document', 'document:', 'content:')):
+                        words = label_text.split()
+                        if len(words) > 3:
+                            label_text = ' '.join(words[2:])
+
+                    if len(label_text) > 30:
+                        label_text = label_text[:27] + "..."
+                else:
+                    label_text = f"Chunk {chunk_id[:8]}..."
+
+                # 添加Chunk節點
+                nodes.append({
+                    "id": chunk_id,
+                    "label": label_text,
+                    "type": "chunk",
+                    "properties": {
+                        "content": chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text,
+                        "vector_id": str(record["vector_id"]) if record["vector_id"] else None,
+                        "chunk_id_short": chunk_id[:8]
+                    }
+                })
+
+                # 添加Document到Chunk的邊
+                edges.append({
+                    "id": f"edge_{record['doc_id']}_{chunk_id}",
+                    "source": str(record["doc_id"]),
+                    "target": chunk_id,
+                    "label": "contains",
+                    "type": "contains"
+                })
+
+        # 3. 添加Entity節點和關係
+        # 首先收集所有在關係中被引用的Entity ID，確保它們都被包含
+        entity_ids_in_relations = set()
+        async with db_manager.neo4j_session() as session:
+            result = await session.run("""
+            MATCH (e:Entity)-[r:MENTIONED_IN]->(c:Chunk)
+            RETURN DISTINCT e.entity_id as entity_id
+            LIMIT $limit
+            """, limit=min(limit * 2, 400))
+
+            records = await result.fetch(min(limit * 2, 400))
+            for record in records:
+                entity_ids_in_relations.add(str(record["entity_id"]))
+
+        # 查詢所有相關的Entity節點
+        entity_ids_list = list(entity_ids_in_relations)
+        if entity_ids_list:
             async with db_manager.neo4j_session() as session:
                 result = await session.run("""
-                MATCH (d:Document {document_id: $doc_id})-[:HAS_CHUNK]->(c:Chunk)
-                RETURN c.chunk_id as chunk_id, c.text as text, c.vector_id as vector_id
-                LIMIT 10
-                """, doc_id=doc_id)
+                MATCH (e:Entity)
+                WHERE e.entity_id IN $entity_ids
+                RETURN e.entity_id as entity_id, e.name as name, e.type as type
+                """, entity_ids=list(entity_ids_in_relations))
 
-                records = await result.fetch(10)
+                records = await result.fetch(len(entity_ids_list))
 
                 for record in records:
-                    chunk_id = str(record["chunk_id"])
-                    chunk_text = record["text"] or ""
+                    entity_id = str(record["entity_id"])
+                    entity_name = record["name"]
+                    entity_type = record["type"]
 
-                    # 生成更有意義的分塊標籤
-                    if chunk_text and len(chunk_text.strip()) > 10:
-                        # 提取前30個字符作為標籤，去除常見的無意義前綴
-                        label_text = chunk_text.strip()[:50]
-                        # 移除常見的fallback前綴
-                        if label_text.lower().startswith(('pdf document', 'document:', 'content:')):
-                            # 嘗試提取更有意義的部分
-                            words = label_text.split()
-                            if len(words) > 3:
-                                label_text = ' '.join(words[2:])  # 跳過前兩個詞
+                    # 為實體名稱生成簡潔標籤
+                    label = entity_name
+                    if len(label) > 30:
+                        label = label[:27] + "..."
 
-                        # 如果還是太長，截斷並添加省略號
-                        if len(label_text) > 30:
-                            label_text = label_text[:27] + "..."
-                    else:
-                        # Fallback到chunk ID
-                        label_text = f"Chunk {chunk_id[:8]}..."
-
-                    # 添加Chunk節點
                     nodes.append({
-                        "id": chunk_id,
-                        "label": label_text,
-                        "type": "chunk",
+                        "id": entity_id,
+                        "label": label,
+                        "type": "entity",
                         "properties": {
-                            "content": chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text,
-                            "vector_id": str(record["vector_id"]) if record["vector_id"] else None,
-                            "chunk_id_short": chunk_id[:8]
+                            "name": entity_name,
+                            "entity_type": entity_type,
+                            "description": f"{entity_type}: {entity_name}"
                         }
                     })
 
-                    # 添加Document到Chunk的邊
-                    edges.append({
-                        "id": f"edge_{doc_id}_{chunk_id}",
-                        "source": doc_id,
-                        "target": chunk_id,
-                        "label": "contains",
-                        "type": "contains"
-                    })
+        # 4. 添加Entity-Chunk的MENTIONED_IN關係
+        async with db_manager.neo4j_session() as session:
+            result = await session.run("""
+            MATCH (e:Entity)-[r:MENTIONED_IN]->(c:Chunk)
+            RETURN e.entity_id as entity_id, c.chunk_id as chunk_id, r.confidence as confidence
+            LIMIT $limit
+            """, limit=min(limit * 5, 500))  # 每個節點最多5個關係
+
+            records = await result.fetch(min(limit * 5, 500))
+
+            for record in records:
+                entity_id = str(record["entity_id"])
+                chunk_id = str(record["chunk_id"])
+
+                edges.append({
+                    "id": f"mention_{entity_id}_{chunk_id}",
+                    "source": entity_id,
+                    "target": chunk_id,
+                    "label": "mentioned in",
+                    "type": "mentioned_in",
+                    "properties": {
+                        "confidence": float(record["confidence"]) if record["confidence"] else 0.8
+                    }
+                })
+
+        # 5. 添加Event節點和關係 (如果有的話)
+        async with db_manager.neo4j_session() as session:
+            result = await session.run("""
+            MATCH (ev:Event)
+            RETURN ev.event_id as event_id, ev.type as type, ev.description as description
+            LIMIT $limit
+            """, limit=min(limit // 2, 50))  # 限制Event數量
+
+            records = await result.fetch(min(limit // 2, 50))
+
+            for record in records:
+                event_id = str(record["event_id"])
+                event_type = record["type"]
+                description = record["description"] or ""
+
+                # 生成簡潔標籤
+                label = f"{event_type}"
+                if len(description) > 20:
+                    label += f": {description[:17]}..."
+
+                nodes.append({
+                    "id": event_id,
+                    "label": label,
+                    "type": "event",
+                    "properties": {
+                        "event_type": event_type,
+                        "description": description
+                    }
+                })
+
+        # 6. 添加Event相關的關係
+        async with db_manager.neo4j_session() as session:
+            result = await session.run("""
+            MATCH (e:Entity)-[r:PARTICIPATES_IN]->(ev:Event)
+            RETURN e.entity_id as entity_id, ev.event_id as event_id
+            LIMIT $limit
+            """, limit=min(limit * 2, 200))
+
+            records = await result.fetch(min(limit * 2, 200))
+
+            for record in records:
+                entity_id = str(record["entity_id"])
+                event_id = str(record["event_id"])
+
+                edges.append({
+                    "id": f"participates_{entity_id}_{event_id}",
+                    "source": entity_id,
+                    "target": event_id,
+                    "label": "participates in",
+                    "type": "participates_in"
+                })
 
         await db_manager.close()
+
+        # 統計信息
+        node_counts = {}
+        for node in nodes:
+            node_type = node["type"]
+            node_counts[node_type] = node_counts.get(node_type, 0) + 1
+
+        edge_counts = {}
+        for edge in edges:
+            edge_type = edge["type"]
+            edge_counts[edge_type] = edge_counts.get(edge_type, 0) + 1
 
         return {
             "nodes": nodes,
@@ -624,12 +774,17 @@ async def get_knowledge_graph(limit: int = 100):
             "metadata": {
                 "total_nodes": len(nodes),
                 "total_edges": len(edges),
-                "timestamp": datetime.now().isoformat()
+                "node_types": node_counts,
+                "edge_types": edge_counts,
+                "timestamp": datetime.now().isoformat(),
+                "data_sources": ["neo4j"]
             }
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get knowledge graph: {str(e)}")
+        import traceback
+        error_details = f"{str(e)}\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=f"Failed to get knowledge graph: {error_details}")
 
 def main():
     """啟動FastAPI服務"""

@@ -11,7 +11,7 @@ import time
 
 from .chunking_service import ChunkingService
 from .embedding_service import EmbeddingService
-from .knowledge_extraction import KnowledgeExtractor
+from .llm_knowledge_extractor import LLMKnowledgeExtractor
 from ..vision.vlm_service import VLMService
 from ..langchain_loader import LangChainDocumentLoader, DocumentProcessingStrategy, StructuredTextFallback
 from grag.core.config import settings
@@ -198,8 +198,12 @@ class IngestionService:
             # Fallback to rule-based title generation
             return IngestionService.generate_smart_title(file_path, content, max_length)
 
-    def __init__(self):
-        """Initialize ingestion service using environment configuration"""
+    def __init__(self, use_llm_knowledge_extraction: bool = True):
+        """Initialize ingestion service using environment configuration
+
+        Args:
+            use_llm_knowledge_extraction: Whether to use LLM-powered knowledge extraction
+        """
         # Initialize components using environment settings
         self.vlm_service = VLMService(
             enable_pymupdf=True,  # PyMuPDF for complete extraction (highest priority)
@@ -210,7 +214,15 @@ class IngestionService:
 
         self.chunking_service = ChunkingService()  # Uses settings.chunk_size, etc.
         self.embedding_service = EmbeddingService()  # Uses settings.embedding_model
-        self.knowledge_extractor = KnowledgeExtractor()  # Uses settings.extract_*
+
+        # Initialize knowledge extractors
+        self.use_llm_knowledge_extraction = use_llm_knowledge_extraction
+        if use_llm_knowledge_extraction:
+            self.knowledge_extractor = LLMKnowledgeExtractor(use_llm=True)
+            logger.info("Using LLM-powered knowledge extraction")
+        else:
+            self.knowledge_extractor = KnowledgeExtractor()  # Rule-based fallback
+            logger.info("Using rule-based knowledge extraction")
 
         # Initialize LangChain-based document processing
         self.langchain_loader = LangChainDocumentLoader()
@@ -293,8 +305,19 @@ class IngestionService:
             )
 
             # Database Ingestion (保持現有邏輯)
+            # 傳遞處理結果信息以存儲到Document節點
+            processing_info = {
+                "processing_method": "PyMuPDF" if vlm_output.metadata and vlm_output.metadata.get("processing_layer") == "PyMuPDF" else "VLM",
+                "processing_quality": "高品質",
+                "content_quality_score": 0.8,
+                "vlm_provider": vlm_output.metadata.get("vlm_provider", "unknown") if vlm_output.metadata else "unknown",
+                "vlm_success": True,
+                "total_characters": len(vlm_output.ocr_text) if vlm_output.ocr_text else 0,
+                "processing_layer": vlm_output.metadata.get("processing_layer", "unknown") if vlm_output.metadata else "unknown"
+            }
+
             ingestion_results = await self._run_database_ingestion(
-                file_id, enriched_chunks, knowledge_data, file_path, area_id
+                file_id, enriched_chunks, knowledge_data, file_path, area_id, processing_info
             )
 
             processing_time = time.time() - start_time
@@ -332,7 +355,7 @@ class IngestionService:
                     "langchain_loaded": True,
                     "loader_type": file_path.suffix,
                 },
-                "statistics": self._generate_statistics(enriched_chunks, knowledge_data, processing_time),
+                "statistics": self._generate_statistics(enriched_chunks, knowledge_data, processing_time, vlm_output),
                 "stage_results": ingestion_results,
                 "metadata": {
                     "chunks_created": len(enriched_chunks),
@@ -644,7 +667,6 @@ class IngestionService:
                                                    processing_metadata: Optional[Dict[str, Any]] = None):
         """Run embedding and knowledge extraction with enhanced traceability"""
         from datetime import datetime
-        from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
 
         processing_metadata = processing_metadata or {}
         processing_start = datetime.now()
@@ -653,8 +675,14 @@ class IngestionService:
         logger.info("Running embedding generation...")
         embedded_chunks = self.embedding_service.embed_chunks(chunks)
 
+        # Extract knowledge with enhanced error handling
+        logger.info("Running knowledge extraction...")
+        knowledge_data = await self._extract_knowledge_with_fallback(embedded_chunks, visual_facts)
+
         # Add traceability and quality assessment to each chunk
         for i, chunk in enumerate(embedded_chunks):
+            from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
+
             chunk_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,  # Chunks are stored in Neo4j
                 source_id=chunk.get("chunk_id"),
@@ -679,12 +707,6 @@ class IngestionService:
             chunk["content_type"] = "chunk"
             chunk["confidence"] = chunk_traceability.quality_score
 
-        # Extract knowledge with traceability
-        logger.info("Running knowledge extraction...")
-        knowledge_data = self.knowledge_extractor.extract_knowledge(
-            embedded_chunks, visual_facts
-        )
-
         # Enhance knowledge data with traceability
         enhanced_entities = []
         for entity in knowledge_data.get("entities", []):
@@ -695,6 +717,8 @@ class IngestionService:
                     source_id = UUID(source_id)
                 except (ValueError, TypeError):
                     source_id = uuid4()
+
+            from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
 
             entity_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,
@@ -731,6 +755,8 @@ class IngestionService:
             except (ValueError, TypeError):
                 source_id = uuid4()
 
+            from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
+
             relation_traceability = TraceabilityInfo(
                 source_type=SourceType.NEO4J,
                 source_id=source_id,
@@ -765,6 +791,8 @@ class IngestionService:
                     source_id = UUID(source_id)
                 except (ValueError, TypeError):
                     source_id = uuid4()
+
+            from grag.core.schemas.unified_schemas import TraceabilityInfo, ExtractionMethod, Modality, SourceType
 
             fact_traceability = TraceabilityInfo(
                 source_type=SourceType.SUPABASE,  # Visual facts come from VLM/vector processing
@@ -827,12 +855,64 @@ class IngestionService:
 
         return embedded_chunks, enhanced_knowledge_data
 
+    async def _extract_knowledge_with_fallback(self,
+                                             embedded_chunks: List[Dict[str, Any]],
+                                             visual_facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Extract knowledge using LLM first, then fallback to regex if needed"""
+        logger.info(f"Starting knowledge extraction with {len(embedded_chunks)} chunks")
+
+        try:
+            # Try LLM extraction first
+            llm_entities = []
+            for chunk in embedded_chunks:
+                try:
+                    chunk_entities = await self.knowledge_extractor._extract_entities_with_llm(
+                        chunk.get("content", ""), str(chunk.get("chunk_id", ""))
+                    )
+                    llm_entities.extend(chunk_entities)
+                except Exception as e:
+                    logger.warning(f"LLM extraction failed for chunk {chunk.get('chunk_id')}: {e}")
+
+            # If LLM extracted entities, use them
+            if llm_entities:
+                logger.info(f"LLM extracted {len(llm_entities)} entities, using LLM results")
+                # Get relations and events using regex
+                knowledge_data = await self.knowledge_extractor.extract_knowledge(embedded_chunks, visual_facts)
+                # Replace entities with LLM results
+                knowledge_data["entities"] = llm_entities
+                logger.info(f"Returning LLM-enhanced knowledge data with {len(knowledge_data.get('entities', []))} entities")
+                return knowledge_data
+            else:
+                logger.info("LLM extraction returned no entities, falling back to regex")
+                # Fallback to regex extraction
+                knowledge_data = await self.knowledge_extractor.extract_knowledge(embedded_chunks, visual_facts)
+                logger.info(f"Returning regex knowledge data with {len(knowledge_data.get('entities', []))} entities")
+                return knowledge_data
+
+        except Exception as e:
+            logger.error(f"Critical error in knowledge extraction fallback: {e}")
+            # Emergency fallback - return minimal valid structure
+            logger.warning("Returning emergency fallback knowledge data")
+            return {
+                "entities": [],
+                "relations": [],
+                "events": [],
+                "visual_facts": visual_facts or [],
+                "metadata": {
+                    "extraction_method": "emergency_fallback",
+                    "error": str(e),
+                    "timestamp": "unknown"
+                }
+            }
+
+
     async def _run_database_ingestion(self,
                                     file_id: str,
                                     chunks: List[Dict[str, Any]],
                                     knowledge_data: Dict[str, Any],
                                     file_path: Path,
-                                    area_id: str) -> Dict[str, Any]:
+                                    area_id: str,
+                                    processing_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Ingest all processed data into databases"""
 
         try:
@@ -867,7 +947,7 @@ class IngestionService:
             }
 
             # Ingest to databases
-            neo4j_result = await self._ingest_neo4j(neo4j_data)
+            neo4j_result = await self._ingest_neo4j(neo4j_data, processing_info)
             pgvector_result = await self._ingest_pgvector(pgvector_data)
 
             return {
@@ -883,7 +963,7 @@ class IngestionService:
                 "error": str(e)
             }
 
-    async def _ingest_neo4j(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _ingest_neo4j(self, data: Dict[str, Any], processing_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Ingest knowledge graph data into Neo4j using synchronous methods"""
         try:
             from datetime import datetime
@@ -901,6 +981,15 @@ class IngestionService:
             # Try LLM-generated title first, fallback to rule-based if it fails
             smart_title = await self.generate_llm_smart_title(file_path, sample_content)
 
+            # Extract processing information from data
+            processing_method = data.get("processing_method", "VLM")
+            processing_quality = data.get("processing_quality", "高品質")
+            content_quality_score = data.get("content_quality_score", 0.8)
+            vlm_provider = data.get("vlm_provider", "unknown")
+            vlm_success = data.get("vlm_success", True)
+            total_characters = data.get("total_characters", 0)
+            processing_layer = data.get("processing_layer", "unknown")
+
             # Create Document node using synchronous method
             doc_data = {
                 "document_id": data["file_id"],
@@ -908,7 +997,14 @@ class IngestionService:
                 "source_path": data["file_path"],
                 "hash": "",
                 "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now().isoformat(),
+                "processing_method": processing_method,
+                "processing_quality": processing_quality,
+                "content_quality_score": content_quality_score,
+                "vlm_provider": vlm_provider,
+                "vlm_success": vlm_success,
+                "total_characters": total_characters,
+                "processing_layer": processing_layer
             }
             doc_result = await self.db_manager.create_document_sync(doc_data)
 
@@ -931,12 +1027,164 @@ class IngestionService:
                     if "vector_id" in chunk:
                         await self._update_chunk_vector_id(chunk["chunk_id"], chunk["vector_id"])
 
+            # Create Entity nodes and relationships
+            entities_created = 0
+            entity_relations_created = 0
+            for entity_data in data.get("entities", []):
+                try:
+                    from grag.core.schemas.neo4j_schemas import EntityNode, Neo4jRelationship
+                    from uuid import uuid4
+
+                    # Ensure entity has an ID
+                    entity_id = entity_data.get("entity_id")
+                    if not entity_id:
+                        entity_id = uuid4()
+
+                    entity = EntityNode(
+                        entity_id=entity_id,
+                        name=entity_data["name"],
+                        type=entity_data["type"],
+                        description=entity_data.get("description", ""),
+                        aliases=entity_data.get("aliases", [])
+                    )
+
+                    # Create entity node
+                    created_entity_id = await self.db_manager.create_entity_node(entity)
+                    entities_created += 1
+
+                    # Create MENTIONED_IN relationships with chunks
+                    chunk_ids = entity_data.get("chunk_ids", [])
+                    if not chunk_ids and entity_data.get("chunk_id"):
+                        chunk_ids = [entity_data["chunk_id"]]
+
+                    for chunk_id in chunk_ids:
+                        try:
+                            relationship = Neo4jRelationship(
+                                from_node="Entity",
+                                to_node="Chunk",
+                                relationship_type="MENTIONED_IN",
+                                from_id=created_entity_id,
+                                to_id=chunk_id
+                            )
+                            success = await self.db_manager.create_relationship(relationship)
+                            if success:
+                                entity_relations_created += 1
+                        except Exception as rel_error:
+                            logger.warning(f"Failed to create Entity-Chunk relationship: {rel_error}")
+
+                except Exception as entity_error:
+                    logger.warning(f"Failed to create entity: {entity_error}")
+
+            # Create Event nodes and relationships
+            events_created = 0
+            event_relations_created = 0
+            for event_data in data.get("events", []):
+                try:
+                    from grag.core.schemas.neo4j_schemas import EventNode, Neo4jRelationship
+
+                    # Ensure event has an ID
+                    event_id = event_data.get("event_id")
+                    if not event_id:
+                        event_id = uuid4()
+
+                    event = EventNode(
+                        event_id=event_id,
+                        type=event_data["type"],
+                        timestamp=event_data.get("timestamp", ""),
+                        description=event_data.get("description", "")
+                    )
+
+                    # Create event node
+                    created_event_id = await self.db_manager.create_event_node(event)
+                    events_created += 1
+
+                    # Create PARTICIPATES_IN relationships with entities
+                    entity_ids = event_data.get("entities_involved", [])
+                    for entity_id in entity_ids:
+                        try:
+                            relationship = Neo4jRelationship(
+                                from_node="Entity",
+                                to_node="Event",
+                                relationship_type="PARTICIPATES_IN",
+                                from_id=entity_id,
+                                to_id=created_event_id
+                            )
+                            success = await self.db_manager.create_relationship(relationship)
+                            if success:
+                                event_relations_created += 1
+                        except Exception as rel_error:
+                            logger.warning(f"Failed to create Entity-Event relationship: {rel_error}")
+
+                except Exception as event_error:
+                    logger.warning(f"Failed to create event: {event_error}")
+
+            # Create VisualFact nodes and relationships
+            visual_facts_created = 0
+            visual_fact_relations_created = 0
+            for fact_data in data.get("visual_facts", []):
+                try:
+                    from grag.core.schemas.neo4j_schemas import VisualFactNode, Neo4jRelationship
+                    from uuid import uuid4
+
+                    # Ensure visual fact has an ID
+                    fact_id = fact_data.get("fact_id")
+                    if not fact_id:
+                        fact_id = uuid4()
+
+                    # Ensure vector_id exists for VisualFact
+                    vector_id = fact_data.get("vector_id")
+                    if not vector_id:
+                        # Skip visual facts without vector_id as they can't be properly stored
+                        logger.warning(f"Skipping visual fact without vector_id: {fact_id}")
+                        continue
+
+                    fact = VisualFactNode(
+                        fact_id=fact_id,
+                        vector_id=vector_id,
+                        region_id=fact_data.get("region_id", ""),
+                        modality=fact_data.get("modality", "visual"),
+                        description=fact_data.get("description", ""),
+                        bbox=fact_data.get("bbox", []),
+                        page=fact_data.get("page", 1)
+                    )
+
+                    # Create visual fact node
+                    created_fact_id = await self.db_manager.create_visual_fact_node(fact)
+                    visual_facts_created += 1
+
+                    # Create MENTIONED_IN relationships with chunks
+                    chunk_ids = fact_data.get("chunk_ids", [])
+                    if not chunk_ids and fact_data.get("chunk_id"):
+                        chunk_ids = [fact_data["chunk_id"]]
+
+                    for chunk_id in chunk_ids:
+                        try:
+                            relationship = Neo4jRelationship(
+                                from_node="VisualFact",
+                                to_node="Chunk",
+                                relationship_type="MENTIONED_IN",
+                                from_id=created_fact_id,
+                                to_id=chunk_id
+                            )
+                            success = await self.db_manager.create_relationship(relationship)
+                            if success:
+                                visual_fact_relations_created += 1
+                        except Exception as rel_error:
+                            logger.warning(f"Failed to create VisualFact-Chunk relationship: {rel_error}")
+
+                except Exception as fact_error:
+                    logger.warning(f"Failed to create visual fact: {fact_error}")
+
             return {
                 "success": True,
                 "document_created": 1,
                 "chunks_created": chunks_created,
-                "entities_created": 0,  # Placeholder
-                "relations_created": 0  # Placeholder
+                "entities_created": entities_created,
+                "events_created": events_created,
+                "visual_facts_created": visual_facts_created,
+                "entity_relations_created": entity_relations_created,
+                "event_relations_created": event_relations_created,
+                "visual_fact_relations_created": visual_fact_relations_created
             }
 
         except Exception as e:
@@ -1019,17 +1267,24 @@ class IngestionService:
     def _generate_statistics(self,
                            chunks: List[Dict[str, Any]],
                            knowledge_data: Dict[str, Any],
-                           processing_time: float) -> Dict[str, Any]:
+                           processing_time: float,
+                           vlm_output=None) -> Dict[str, Any]:
         """Generate comprehensive processing statistics"""
 
         chunk_sizes = [len(c["content"]) for c in chunks if "content" in c]
+
+        # Calculate total characters from chunks or VLM output
+        total_characters = sum(chunk_sizes)
+        if vlm_output and hasattr(vlm_output, 'ocr_text') and vlm_output.ocr_text:
+            # Prefer the total characters from VLM output if available
+            total_characters = len(vlm_output.ocr_text)
 
         return {
             "processing_time_seconds": processing_time,
             "chunks": {
                 "total": len(chunks),
                 "avg_size": sum(chunk_sizes) / len(chunk_sizes) if chunk_sizes else 0,
-                "total_characters": sum(chunk_sizes),
+                "total_characters": total_characters,
             },
             "embeddings": {
                 "created": len([c for c in chunks if "vector_id" in c]),

@@ -12,7 +12,7 @@ from uuid import UUID
 from neo4j import AsyncGraphDatabase
 from supabase import Client, create_client
 
-from .schemas.neo4j_schemas import DocumentNode, ChunkNode, VisualFactNode
+from .schemas.neo4j_schemas import DocumentNode, ChunkNode, EntityNode, EventNode, VisualFactNode, Neo4jRelationship
 from .schemas.pgvector_schemas import VectorRecord, VectorInsert
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ class DatabaseManager:
             return results
 
     async def list_documents(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
-        """List documents from Neo4j with pagination"""
+        """List documents from Neo4j with pagination and processing information"""
         try:
             query = """
             MATCH (d:Document)
@@ -177,6 +177,13 @@ class DatabaseManager:
                    d.source_path as source_path,
                    d.created_at as created_at,
                    d.updated_at as updated_at,
+                   d.processing_method as processing_method,
+                   d.processing_quality as processing_quality,
+                   d.content_quality_score as content_quality_score,
+                   d.vlm_provider as vlm_provider,
+                   d.vlm_success as vlm_success,
+                   d.total_characters as total_characters,
+                   d.processing_layer as processing_layer,
                    chunk_count
             ORDER BY d.created_at DESC
             SKIP $offset
@@ -197,7 +204,15 @@ class DatabaseManager:
                         "updated_at": record["updated_at"].isoformat() if record["updated_at"] else None,
                         "chunk_count": record["chunk_count"] or 0,
                         "file_size": 0,
-                        "processing_status": "completed"
+                        "processing_status": "completed",
+                        # Processing information from database
+                        "processing_method": record["processing_method"],
+                        "processing_quality": record["processing_quality"],
+                        "content_quality_score": record["content_quality_score"],
+                        "vlm_provider": record["vlm_provider"],
+                        "vlm_success": record["vlm_success"],
+                        "total_characters": record["total_characters"],
+                        "processing_layer": record["processing_layer"]
                     }
                     documents.append(doc)
 
@@ -395,7 +410,14 @@ class DatabaseManager:
                     source_path: $source_path,
                     hash: $hash,
                     created_at: datetime($created_at),
-                    updated_at: datetime($updated_at)
+                    updated_at: datetime($updated_at),
+                    processing_method: $processing_method,
+                    processing_quality: $processing_quality,
+                    content_quality_score: $content_quality_score,
+                    vlm_provider: $vlm_provider,
+                    vlm_success: $vlm_success,
+                    total_characters: $total_characters,
+                    processing_layer: $processing_layer
                 })
                 RETURN d.document_id as document_id
                 """,
@@ -404,12 +426,19 @@ class DatabaseManager:
                 source_path=document_data["source_path"],
                 hash=document_data.get("hash", ""),
                 created_at=document_data["created_at"],
-                updated_at=document_data["updated_at"]
+                updated_at=document_data["updated_at"],
+                processing_method=document_data.get("processing_method"),
+                processing_quality=document_data.get("processing_quality"),
+                content_quality_score=document_data.get("content_quality_score"),
+                vlm_provider=document_data.get("vlm_provider"),
+                vlm_success=document_data.get("vlm_success"),
+                total_characters=document_data.get("total_characters"),
+                processing_layer=document_data.get("processing_layer")
                 )
 
                 record = result.single()
                 if record:
-                    logger.info(f"Created Neo4j document node: {document_data['document_id']}")
+                    logger.info(f"Created Neo4j document node with processing results: {document_data['document_id']}")
                     return {"success": True, "document_created": True}
                 else:
                     return {"success": False, "error": "No record returned"}
@@ -503,6 +532,106 @@ class DatabaseManager:
                 return chunk.chunk_id
             else:
                 raise Exception("Failed to create chunk node")
+
+    async def create_entity_node(self, entity: EntityNode) -> UUID:
+        """
+        Create an entity node in Neo4j using the EntityNode schema
+
+        Args:
+            entity: EntityNode instance with validated data
+
+        Returns:
+            UUID: The entity_id that was created
+        """
+        query = """
+        CREATE (e:Entity {
+            entity_id: $entity_id,
+            name: $name,
+            type: $type,
+            description: $description,
+            aliases: $aliases
+        })
+        RETURN e.entity_id as entity_id
+        """
+
+        async with self.neo4j_session() as session:
+            result = await session.run(query,
+                entity_id=str(entity.entity_id),
+                name=entity.name,
+                type=entity.type,
+                description=entity.description,
+                aliases=entity.aliases
+            )
+            record = await result.single()
+            if record:
+                logger.info(f"Created entity node: {entity.entity_id} ({entity.name})")
+                return entity.entity_id
+            else:
+                raise Exception("Failed to create entity node")
+
+    async def create_event_node(self, event: EventNode) -> UUID:
+        """
+        Create an event node in Neo4j using the EventNode schema
+
+        Args:
+            event: EventNode instance with validated data
+
+        Returns:
+            UUID: The event_id that was created
+        """
+        query = """
+        CREATE (ev:Event {
+            event_id: $event_id,
+            type: $type,
+            timestamp: $timestamp,
+            description: $description
+        })
+        RETURN ev.event_id as event_id
+        """
+
+        async with self.neo4j_session() as session:
+            result = await session.run(query,
+                event_id=str(event.event_id),
+                type=event.type,
+                timestamp=event.timestamp,
+                description=event.description
+            )
+            record = await result.single()
+            if record:
+                logger.info(f"Created event node: {event.event_id} ({event.type})")
+                return event.event_id
+            else:
+                raise Exception("Failed to create event node")
+
+    async def create_relationship(self, relationship: Neo4jRelationship) -> bool:
+        """
+        Create a relationship between two nodes in Neo4j
+
+        Args:
+            relationship: Neo4jRelationship instance with relationship data
+
+        Returns:
+            bool: True if relationship created successfully
+        """
+        query = f"""
+        MATCH (a:{relationship.from_node} {{{relationship.from_node.lower()}_id: $from_id}})
+        MATCH (b:{relationship.to_node} {{{relationship.to_node.lower()}_id: $to_id}})
+        CREATE (a)-[:{relationship.relationship_type}]->(b)
+        RETURN count(*) as created
+        """
+
+        async with self.neo4j_session() as session:
+            result = await session.run(query,
+                from_id=str(relationship.from_id),
+                to_id=str(relationship.to_id)
+            )
+            record = await result.single()
+            if record and record["created"] > 0:
+                logger.info(f"Created relationship: {relationship.from_node} -> {relationship.relationship_type} -> {relationship.to_node}")
+                return True
+            else:
+                logger.warning(f"Failed to create relationship: {relationship.from_node} -> {relationship.relationship_type} -> {relationship.to_node}")
+                return False
 
     async def create_visual_fact_node(self, fact: VisualFactNode) -> UUID:
         """
