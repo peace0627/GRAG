@@ -70,13 +70,45 @@ class VisualFactNode(BaseModel):
 
 # Relationship types (for reference)
 RELATIONSHIP_TYPES = {
+    # Legacy relationships (backward compatibility)
     "HAS_CHUNK": "Document -> Chunk",
     "MENTIONED_IN": "Entity/Event/VisualFact -> Chunk",
     "RELATED_TO": "Entity -> Entity",
     "PARTICIPATES_IN": "Entity -> Event",
     "CAUSES": "Event -> Event",
-    "DESCRIBED_BY_IMAGE": "Entity -> VisualFact"
+    "DESCRIBED_BY_IMAGE": "Entity -> VisualFact",
+
+    # Domain-specific relationships (auto-imported from domain_relationships.py)
 }
+
+# Import domain-specific relationships
+try:
+    from .domain_relationships import (
+        FINANCIAL_RELATIONSHIPS,
+        MEDICAL_DEVICE_RELATIONSHIPS,
+        PROSPECT_RELATIONSHIPS,
+        INTERNAL_REPORT_RELATIONSHIPS,
+        CROSS_DOMAIN_RELATIONSHIPS,
+        LEGACY_RELATIONSHIPS
+    )
+
+    # Merge domain relationships into RELATIONSHIP_TYPES
+    RELATIONSHIP_TYPES.update({
+        # Financial domain
+        **{f"FINANCIAL_{k}": v["description"] for k, v in FINANCIAL_RELATIONSHIPS.items()},
+        # Medical device domain
+        **{f"MEDICAL_{k}": v["description"] for k, v in MEDICAL_DEVICE_RELATIONSHIPS.items()},
+        # Prospect domain
+        **{f"PROSPECT_{k}": v["description"] for k, v in PROSPECT_RELATIONSHIPS.items()},
+        # Internal report domain
+        **{f"INTERNAL_{k}": v["description"] for k, v in INTERNAL_REPORT_RELATIONSHIPS.items()},
+        # Cross-domain
+        **{f"GENERAL_{k}": v["description"] for k, v in CROSS_DOMAIN_RELATIONSHIPS.items()},
+    })
+
+except ImportError:
+    # Fallback if domain_relationships.py is not available
+    pass
 
 
 class Neo4jRelationship(BaseModel):

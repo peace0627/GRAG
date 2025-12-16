@@ -233,8 +233,24 @@ class ToolAgent:
 
         start_time = time.time()
         agent = RetrievalAgent(self.db_manager)
+
+        # Check if we have graph results from previous steps for graph-guided enhancement
+        graph_results = self._get_previous_graph_results(query_state)
+
+        if graph_results:
+            # Use graph-guided enhancement for vector search
+            logger.info("Graph results available, enhancing vector search with graph context")
+            enhanced_query = agent.enhance_query_with_graph_context(
+                query_state.original_query, graph_results
+            )
+            search_query = enhanced_query
+            parameters['merge_strategy'] = 'graph_guided_reranking'
+            parameters['graph_boost_factor'] = 1.3  # 30% boost for graph-matched content
+        else:
+            search_query = query_state.original_query
+
         result = await agent.retrieve(
-            query=query_state.original_query,
+            query=search_query,
             tool_type=ToolType.VECTOR_SEARCH,
             parameters=parameters
         )
@@ -242,11 +258,6 @@ class ToolAgent:
 
         # Convert to dict and add evidence
         result_dict = result.model_dump()
-        logger.info(f"Raw result_dict keys: {list(result_dict.keys())}")
-        logger.info(f"Result has execution_time attr: {hasattr(result, 'execution_time')}")
-        if hasattr(result, 'execution_time'):
-            logger.info(f"Result execution_time value: {result.execution_time}")
-
         result_dict['execution_time'] = execution_time
 
         logger.info(f"Vector search result: {len(result.vector_results)} results, execution_time set to {execution_time}")
@@ -526,6 +537,26 @@ class ToolAgent:
         }
 
         return descriptions.get(tool_type, f"Execute {tool_type.value} operation")
+
+    def _get_previous_graph_results(self, query_state: QueryState) -> List[Dict[str, Any]]:
+        """Get graph results from previously executed steps"""
+        graph_results = []
+
+        # Look through executed steps for graph traversal results
+        for step_id, result in query_state.intermediate_results.items():
+            if isinstance(result, dict):
+                # Check if this step was a graph traversal
+                if 'graph_results' in result and result['graph_results']:
+                    graph_results.extend(result['graph_results'])
+
+                # Also check merged results that might contain graph data
+                if 'merged_results' in result and result['merged_results']:
+                    for merged_result in result['merged_results']:
+                        if merged_result.get('source') == 'graph':
+                            graph_results.append(merged_result)
+
+        logger.info(f"Found {len(graph_results)} previous graph results for enhancement")
+        return graph_results
 
 
 class ReflectorAgent:

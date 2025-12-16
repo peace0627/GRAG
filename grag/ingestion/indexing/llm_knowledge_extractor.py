@@ -3,6 +3,7 @@
 import logging
 import json
 import re
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from uuid import uuid4
 from datetime import datetime
@@ -91,6 +92,7 @@ class LLMKnowledgeExtractor:
 
         # Process results
         all_entities = []
+        all_relations = []
         failed_chunks = 0
 
         for i, result in enumerate(results):
@@ -102,19 +104,22 @@ class LLMKnowledgeExtractor:
                 failed_chunks += 1
                 continue
 
-            if result and isinstance(result, list):
-                all_entities.extend(result)
-                logger.info(f"Chunk {chunk_id}: extracted {len(result)} entities")
+            if result and isinstance(result, tuple) and len(result) == 2:
+                entities, relations = result
+                all_entities.extend(entities)
+                all_relations.extend(relations)
+                logger.info(f"Chunk {chunk_id}: extracted {len(entities)} entities, {len(relations)} relations")
 
         # Remove duplicates
         unique_entities = self._deduplicate_entities(all_entities)
+        unique_relations = self._deduplicate_relations(all_relations)
 
         # Process visual facts if provided
         processed_visual_facts = self._process_visual_facts(visual_facts or [])
 
         extracted_data = {
             "entities": unique_entities,
-            "relations": [],  # Empty for now
+            "relations": unique_relations,  # Now contains actual relations!
             "events": [],     # Empty for now
             "visual_facts": processed_visual_facts,
             "metadata": {
@@ -124,6 +129,7 @@ class LLMKnowledgeExtractor:
                 "valid_chunks": len(valid_chunks),
                 "failed_chunks": failed_chunks,
                 "entities_extracted": len(unique_entities),
+                "relations_extracted": len(unique_relations),
                 "extraction_timestamp": datetime.now().isoformat(),
                 "extractor_version": "llm-concurrent-v1.0"
             }
@@ -149,8 +155,8 @@ class LLMKnowledgeExtractor:
             }
         }
 
-    async def _extract_entities_with_timeout(self, content: str, chunk_id: str, timeout: float = 15.0) -> List[Dict[str, Any]]:
-        """Extract entities with timeout to prevent hanging"""
+    async def _extract_entities_with_timeout(self, content: str, chunk_id: str, timeout: float = 15.0) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Extract entities and relations with timeout to prevent hanging"""
         try:
             return await asyncio.wait_for(
                 self._extract_entities_with_llm(content, chunk_id),
@@ -158,10 +164,10 @@ class LLMKnowledgeExtractor:
             )
         except asyncio.TimeoutError:
             logger.warning(f"LLM extraction timeout for chunk {chunk_id} after {timeout}s")
-            return []
+            return [], []
         except Exception as e:
             logger.warning(f"LLM extraction error for chunk {chunk_id}: {str(e)[:100]}...")
-            return []
+            return [], []
 
     def _extract_with_rules(self,
                            chunks: List[Dict[str, Any]],
@@ -202,14 +208,47 @@ class LLMKnowledgeExtractor:
 
         return combined_content
 
-    def _create_extraction_prompt(self, content: str) -> str:
-        """Create simplified structured prompt for LLM knowledge extraction"""
-        # Simplify prompt to improve JSON parsing success rate
-        prompt = f"""分析以下文本，提取實體、關係和事件。請以JSON格式返回：
+    def _create_extraction_prompt(self, content: str, domain_type: str = "general") -> str:
+        """Create domain-aware structured prompt for LLM knowledge extraction"""
+        # 根據領域類型獲取可用的關係類型
+        from grag.core.schemas.domain_relationships import relationship_registry, DomainType
 
-文本：{content[:3000]}  # 限制內容長度
+        try:
+            domain_enum = DomainType(domain_type.lower())
+            available_relationships = relationship_registry.get_available_relationships(
+                domain_enum, "Entity", "Chunk"
+            )
+            # 過濾出非MENTIONED_IN的關係類型
+            domain_relations = [rel for rel in available_relationships if rel != "MENTIONED_IN"]
+        except Exception:
+            domain_relations = []
 
-返回格式：
+        # 構建關係類型說明
+        if domain_relations:
+            relation_examples = ", ".join(domain_relations[:5])  # 最多顯示5個
+            relation_note = f"可用關係類型: {relation_examples}"
+            if len(domain_relations) > 5:
+                relation_note += f" 等{len(domain_relations)}種"
+        else:
+            relation_note = "通用關係類型: MENTIONED_IN, RELATED_TO 等"
+
+        # 根據領域調整提示
+        domain_context = ""
+        if domain_type == "medical_device":
+            domain_context = "醫療器材領域：關注FDA、法規遵循、臨床試驗、安全性等"
+        elif domain_type == "financial":
+            domain_context = "財務領域：關注營收、利潤、財務指標、投資等"
+        elif domain_type == "prospect":
+            domain_context = "客戶領域：關注公司、聯絡人、需求、購買意願等"
+
+        prompt = f"""分析以下文本，提取實體和關係。{domain_context}
+
+文本內容：
+{content[:3000]}  # 限制內容長度避免token限制
+
+{relation_note}
+
+請以JSON格式返回：
 {{
   "entities": [
     {{"id": "e1", "name": "實體名稱", "type": "PERSON|ORGANIZATION|LOCATION|PRODUCT", "confidence": 0.9}}
@@ -222,7 +261,7 @@ class LLMKnowledgeExtractor:
   ]
 }}
 
-只返回JSON，不要其他內容。"""
+只返回JSON，不要其他解釋。"""
 
         return prompt
 
@@ -331,14 +370,14 @@ class LLMKnowledgeExtractor:
 
         return relations
 
-    async def _extract_entities_with_llm(self, content: str, chunk_id: str) -> List[Dict[str, Any]]:
-        """Extract entities using LLM with simple text format (no JSON parsing issues)"""
+    async def _extract_entities_with_llm(self, content: str, chunk_id: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Extract entities and relations using LLM with simple text format (no JSON parsing issues)"""
         if not hasattr(self, 'llm') or not self.llm:
-            return []
+            return [], []
 
         try:
-            # Create simple text prompt for LLM
-            prompt = f"""從以下文本中提取重要實體。請按以下格式輸出：
+            # Create simple text prompt for LLM to extract both entities and relations
+            prompt = f"""從以下文本中提取重要實體和實體間的關係。請按以下格式輸出：
 
 文本內容：
 {content[:1500]}  # 限制長度避免token限制
@@ -346,6 +385,9 @@ class LLMKnowledgeExtractor:
 輸出格式：
 實體: [實體名稱] ([類型])
 實體: [實體名稱] ([類型])
+...
+關係: [實體A] -> [關係] -> [實體B]
+關係: [實體A] -> [關係] -> [實體B]
 ...
 
 實體類型包括:
@@ -356,32 +398,35 @@ class LLMKnowledgeExtractor:
 - PRODUCT: 產品名稱
 - OTHER: 其他重要實體
 
-只需要列出最重要的實體，不要超過10個。
-直接輸出實體列表，不要包含其他解釋。"""
+只需要列出最重要的實體和關係，不要超過10個每個。
+直接輸出實體和關係列表，不要包含其他解釋。"""
 
             # Call LLM
             from langchain_core.messages import HumanMessage
             response = await self.llm.ainvoke([HumanMessage(content=prompt)])
             llm_output = response.content.strip()
 
-            logger.info(f"LLM entity extraction output: {llm_output[:300]}...")
+            logger.info(f"LLM entity+relation extraction output: {llm_output[:300]}...")
 
-            # Parse the simple text format
-            entities = self._parse_llm_entity_output(llm_output, content, chunk_id)
+            # Parse the simple text format for both entities and relations
+            entities, relations = self._parse_llm_entity_relation_output(llm_output, content, chunk_id)
 
-            logger.info(f"LLM extracted {len(entities)} entities from chunk {chunk_id}")
-            return entities
+            logger.info(f"LLM extracted {len(entities)} entities and {len(relations)} relations from chunk {chunk_id}")
+            return entities, relations
 
         except Exception as e:
-            logger.warning(f"LLM entity extraction failed: {e}, falling back to regex")
-            return []
+            logger.warning(f"LLM entity+relation extraction failed: {e}, falling back to empty results")
+            return [], []
 
-    def _parse_llm_entity_output(self, output: str, content: str, chunk_id: str) -> List[Dict[str, Any]]:
-        """Parse LLM output in simple text format"""
+    def _parse_llm_entity_relation_output(self, output: str, content: str, chunk_id: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Parse LLM output in simple text format for both entities and relations"""
         entities = []
+        relations = []
 
         for line in output.split('\n'):
             line = line.strip()
+
+            # Parse entities
             if line.startswith('實體:') or line.startswith('Entity:'):
                 # Parse "實體: Food and Drug Administration (ORGANIZATION)"
                 # or "Entity: Food and Drug Administration (ORGANIZATION)"
@@ -405,6 +450,40 @@ class LLMKnowledgeExtractor:
                         }
                         entities.append(entity)
 
+            # Parse relations
+            elif line.startswith('關係:') or line.startswith('Relation:'):
+                # Parse "關係: [實體A] -> [關係] -> [實體B]" (with brackets)
+                # or "關係: 實體A -> 關係 -> 實體B" (without brackets)
+                # Try with brackets first, then without
+                match = re.search(r'(?:關係|Relation):\s*\[([^\]]+)\]\s*->\s*\[([^\]]+)\]\s*->\s*\[([^\]]+)\]', line, re.IGNORECASE)
+                if not match:
+                    # Try without brackets
+                    match = re.search(r'(?:關係|Relation):\s*([^-\s]+)\s*->\s*([^-]+?)\s*->\s*(.+)', line, re.IGNORECASE)
+
+                if match:
+                    subject, predicate, object_ = match.groups()
+                    subject = subject.strip()
+                    predicate = predicate.strip()
+                    object_ = object_.strip()
+
+                    if subject and predicate and object_:
+                        relation = {
+                            "relation_id": str(uuid4()),
+                            "subject": subject,
+                            "predicate": predicate,
+                            "object": object_,
+                            "confidence": 0.75,  # Default confidence for LLM relations
+                            "evidence": content[:100],  # Use first 100 chars as evidence
+                            "chunk_id": chunk_id,
+                            "extraction_method": "llm"
+                        }
+                        relations.append(relation)
+
+        return entities, relations
+
+    def _parse_llm_entity_output(self, output: str, content: str, chunk_id: str) -> List[Dict[str, Any]]:
+        """Parse LLM output in simple text format (legacy method for backward compatibility)"""
+        entities, _ = self._parse_llm_entity_relation_output(output, content, chunk_id)
         return entities
 
     def _get_occurrence_info(self, match: str, content: str) -> Dict[str, Any]:
@@ -481,6 +560,22 @@ class LLMKnowledgeExtractor:
                 entity_map[key] = entity
 
         return list(entity_map.values())
+
+    def _deduplicate_relations(self, relations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove duplicate relations, keeping the most confident one"""
+        relation_map = {}
+
+        for relation in relations:
+            # Create key from subject-predicate-object triple
+            key = (
+                relation["subject"].lower().strip(),
+                relation["predicate"].lower().strip(),
+                relation["object"].lower().strip()
+            )
+            if key not in relation_map or relation["confidence"] > relation_map[key]["confidence"]:
+                relation_map[key] = relation
+
+        return list(relation_map.values())
 
     def get_extraction_stats(self) -> Dict[str, Any]:
         """Get extraction statistics"""

@@ -28,7 +28,8 @@ interface UploadProgress {
 }
 
 const SUPPORTED_FORMATS = ['pdf', 'docx', 'jpg', 'jpeg', 'png'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB (後端支持50MB)
+const ASYNC_UPLOAD_THRESHOLD = 5 * 1024 * 1024; // 5MB - 大於此大小使用非同步上傳
 
 interface FileUploadProps {
   onUploadSuccess?: () => void;
@@ -87,9 +88,138 @@ export function FileUpload({ onUploadSuccess }: FileUploadProps = {}) {
     setFilesToUpload(newUploads);
   }, []);
 
+  // 非同步進度輪詢
+  const pollUploadProgress = useCallback(async (taskId: string, uploadIndex: number) => {
+    try {
+      const status = await apiService.getUploadStatus(taskId);
+
+      // 更新進度
+      setUploads(prev => prev.map((u, i) => {
+        if (i === uploadIndex) {
+          // 估計前端進度基於後端狀態
+          let progress = 10;
+          if (status.status === 'processing') {
+            progress = Math.min(90, 10 + (Date.now() - new Date(status.start_time || '').getTime()) / 1000 / 30 * 80);
+          } else if (status.status === 'completed') {
+            progress = 100;
+          }
+
+          // 創建處理步驟（基於後端返回的結果）
+          const processingSteps: ProcessingStep[] = [
+            { stage: '文件驗證', module: '前端驗證', method: 'validateFile()', description: '檢查文件格式和大小', status: 'completed', timestamp: new Date() },
+            { stage: '文件上傳', module: '非同步API', method: 'uploadFileAsync()', description: '上傳文件到服務器', status: 'completed', timestamp: new Date() },
+            { stage: '文件載入', module: 'LangChain', method: 'load()', description: '讀取並解析文件內容', status: status.status === 'pending' ? 'pending' : 'processing', timestamp: new Date() },
+            { stage: '文檔處理', module: 'VLM/OCR', method: 'process_document()', description: '執行視覺或文本處理', status: status.status === 'processing' ? 'processing' : 'pending', timestamp: new Date() },
+            { stage: '分塊處理', module: 'LlamaIndex', method: 'get_nodes_from_documents()', description: '將文檔分割為文本片段', status: 'pending', timestamp: new Date() },
+            { stage: '向量嵌入', module: 'SentenceTransformers', method: 'encode()', description: '生成文本向量表示', status: 'pending', timestamp: new Date() },
+            { stage: '知識提取', module: 'NER Extractor', method: 'extract_entities()', description: '識別實體和關係', status: 'pending', timestamp: new Date() },
+            { stage: 'Neo4j 存儲', module: 'Neo4j Graph DB', method: 'create_document_sync()', description: '保存文檔和分塊到圖資料庫', status: 'pending', timestamp: new Date() },
+            { stage: 'Supabase 存儲', module: 'Supabase pgvector', method: 'insert_vector_record()', description: '保存向量到向量資料庫', status: 'pending', timestamp: new Date() }
+          ];
+
+          // 如果任務完成，更新所有步驟為完成
+          if (status.status === 'completed' && status.result) {
+            processingSteps.forEach(step => step.status = 'completed');
+          }
+
+          return {
+            ...u,
+            status: status.status === 'completed' ? 'success' :
+                   status.status === 'failed' ? 'error' :
+                   status.status === 'processing' ? 'uploading' : 'uploading',
+            progress,
+            error: status.error,
+            processingSteps,
+            uploadResponse: status.result
+          };
+        }
+        return u;
+      }));
+
+      // 繼續輪詢或結束
+      if (status.status === 'completed' || status.status === 'failed') {
+        console.log(`Upload ${status.status} for task ${taskId}`);
+
+        // 調用成功回調函數
+        if (status.status === 'completed' && onUploadSuccess) {
+          onUploadSuccess();
+        }
+      } else {
+        // 繼續輪詢（每2秒）
+        setTimeout(() => pollUploadProgress(taskId, uploadIndex), 2000);
+      }
+
+    } catch (error) {
+      console.error('Progress polling failed:', error);
+
+      // 更新為錯誤狀態
+      setUploads(prev => prev.map((u, i) =>
+        i === uploadIndex ? {
+          ...u,
+          status: 'error' as const,
+          progress: 0,
+          error: `進度檢查失敗: ${apiService.getErrorMessage(error as any)}`
+        } : u
+      ));
+    }
+  }, [onUploadSuccess]);
+
   // 處理文件上傳
   const uploadFile = useCallback(async (upload: UploadProgress, index: number) => {
-    console.log('Starting upload for:', upload.file.name);
+    console.log('Starting upload for:', upload.file.name, `Size: ${(upload.file.size / 1024 / 1024).toFixed(2)}MB`);
+
+    // 決定使用同步還是非同步上傳
+    const useAsyncUpload = upload.file.size > ASYNC_UPLOAD_THRESHOLD;
+    console.log(`Using ${useAsyncUpload ? 'async' : 'sync'} upload for file size: ${(upload.file.size / 1024 / 1024).toFixed(2)}MB`);
+
+    if (useAsyncUpload) {
+      // 非同步上傳
+      try {
+        console.log('Starting async upload...');
+
+        // 初始化處理步驟
+        const initialSteps: ProcessingStep[] = [
+          { stage: '文件驗證', module: '前端驗證', method: 'validateFile()', description: '檢查文件格式和大小', status: 'completed', timestamp: new Date() },
+          { stage: '文件上傳', module: '非同步API', method: 'uploadFileAsync()', description: '上傳大文件到服務器', status: 'processing', timestamp: new Date() },
+        ];
+
+        // 更新狀態為上傳中
+        setUploads(prev => prev.map((u, i) =>
+          i === index ? {
+            ...u,
+            status: 'uploading' as const,
+            progress: 5,
+            processingSteps: initialSteps
+          } : u
+        ));
+
+        // 調用非同步上傳API
+        const asyncResult = await apiService.uploadFileAsync(upload.file);
+        console.log('Async upload initiated:', asyncResult);
+
+        // 開始輪詢進度
+        setTimeout(() => pollUploadProgress(asyncResult.task_id, index), 1000);
+
+      } catch (error) {
+        console.error('Async upload failed:', error);
+        const errorMessage = apiService.getErrorMessage(error as any);
+
+        // 更新為錯誤狀態
+        setUploads(prev => prev.map((u, i) =>
+          i === index ? {
+            ...u,
+            status: 'error' as const,
+            progress: 0,
+            error: `非同步上傳失敗: ${errorMessage}`
+          } : u
+        ));
+      }
+
+      return;
+    }
+
+    // 同步上傳（小文件）
+    console.log('Starting sync upload...');
 
     // 初始化處理步驟
     const initialSteps: ProcessingStep[] = [
@@ -312,7 +442,10 @@ export function FileUpload({ onUploadSuccess }: FileUploadProps = {}) {
                 拖拽文件到這裡，或點擊選擇文件
               </p>
               <p className="text-sm text-gray-500">
-                支持格式: PDF, DOCX, JPG, PNG (最大 10MB)
+                支持格式: PDF, DOCX, JPG, PNG (最大 50MB)
+              </p>
+              <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                💡 大文件 (≥5MB) 將使用非同步處理，不會超時
               </p>
             </div>
             <input

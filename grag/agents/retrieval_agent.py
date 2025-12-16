@@ -41,7 +41,8 @@ class RetrievalAgent:
         self._merging_strategies = {
             'weighted_fusion': self._weighted_fusion_merge,
             'source_aware_merge': self._source_aware_merge,
-            'adaptive_merge': self._adaptive_merge
+            'adaptive_merge': self._adaptive_merge,
+            'graph_guided_reranking': self._graph_guided_reranking_merge
         }
 
     def _initialize_db_manager(self) -> DatabaseManager:
@@ -315,7 +316,8 @@ class RetrievalAgent:
         """Enhanced merge and rank vector and graph results with intelligent fusion"""
 
         # Choose merging strategy based on parameters
-        merge_strategy = parameters.get('merge_strategy', 'adaptive_merge')
+        # Default to graph_guided_reranking for better relevance
+        merge_strategy = parameters.get('merge_strategy', 'graph_guided_reranking')
         merge_func = self._merging_strategies.get(merge_strategy, self._adaptive_merge)
 
         logger.info(f"Using merge strategy: {merge_strategy}")
@@ -514,6 +516,198 @@ class RetrievalAgent:
             all_results.append({**result, 'source': 'graph', 'combined_score': combined_score})
 
         return all_results
+
+    def _graph_guided_reranking_merge(self, vector_results: List[Dict[str, Any]],
+                                     graph_results: List[Dict[str, Any]],
+                                     parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Graph-guided reranking: Use graph entities to boost relevant vector results"""
+        logger.info(f"Applying graph-guided reranking: {len(vector_results)} vectors, {len(graph_results)} graphs")
+
+        # Extract entities found in graph search
+        graph_entities = self._extract_entities_from_graph_results(graph_results)
+        graph_relationships = self._extract_relationships_from_graph_results(graph_results)
+        logger.info(f"Found {len(graph_entities)} entities in graph results: {list(graph_entities)[:5]}...")
+        logger.info(f"Found {len(graph_relationships)} relationship types: {list(graph_relationships)[:3]}...")
+
+        # First, apply standard weighted fusion
+        merged_results = self._weighted_fusion_merge(vector_results, graph_results, parameters)
+
+        # Apply graph-guided relevance boost
+        boosted_results = self._apply_graph_relevance_boost(merged_results, graph_entities, parameters)
+
+        # Apply graph-aware reranking based on relationship context
+        final_results = self._apply_graph_aware_reranking(boosted_results, graph_relationships, parameters)
+
+        logger.info(f"Graph-guided reranking completed, boosted {len([r for r in boosted_results if r.get('graph_boost', 0) > 0])} results")
+        return final_results
+
+    def _apply_graph_relevance_boost(self, results: List[Dict[str, Any]],
+                                    graph_entities: set, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply relevance boost to results containing graph-discovered entities"""
+        if not graph_entities:
+            logger.info("No graph entities found for boosting")
+            return results
+
+        boost_factor = parameters.get('graph_boost_factor', 1.3)  # Default 30% boost
+        boosted_count = 0
+
+        for result in results:
+            if result.get('source') == 'vector':
+                content = result.get('content', '').lower()
+
+                # Check if content contains any graph-discovered entities
+                entity_matches = []
+                for entity in graph_entities:
+                    if entity in content:
+                        entity_matches.append(entity)
+
+                if entity_matches:
+                    # Apply boost to combined_score
+                    original_score = result.get('combined_score', result.get('similarity_score', 0.5))
+                    boosted_score = original_score * boost_factor
+                    result['combined_score'] = min(boosted_score, 1.0)  # Cap at 1.0
+                    result['graph_boost'] = boost_factor
+                    result['matched_entities'] = entity_matches[:3]  # Keep top 3 matches
+                    boosted_count += 1
+
+                    logger.debug(f"Boosted vector result: {original_score:.3f} -> {boosted_score:.3f} "
+                               f"(matched: {entity_matches[:2]})")
+
+        logger.info(f"Applied graph-guided boost to {boosted_count} vector results (factor: {boost_factor})")
+        return results
+
+    def _apply_graph_aware_reranking(self, results: List[Dict[str, Any]],
+                                    graph_relationships: set, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Apply graph-aware reranking based on relationship context"""
+        if not graph_relationships:
+            logger.info("No graph relationships found for reranking")
+            return results
+
+        # Define relationship importance scores (domain-specific)
+        relationship_weights = {
+            # Medical domain relationships
+            'REGULATES': 1.4, 'REQUIRES': 1.3, 'COMPLIES_WITH': 1.3, 'APPROVES': 1.3,
+            'MONITORS': 1.2, 'REPORTS_TO': 1.2, 'PREVENTS': 1.2, 'CAUSES': 1.2,
+
+            # Financial domain relationships
+            'OWNS': 1.4, 'INVESTS_IN': 1.3, 'CONTROLS': 1.3, 'FUNDS': 1.3,
+            'DEBT_TO': 1.2, 'PARTNERS_WITH': 1.2, 'ACQUIRES': 1.2,
+
+            # Customer domain relationships
+            'SERVES': 1.4, 'CONTACTS': 1.3, 'PURCHASES_FROM': 1.3, 'SUPPORTS': 1.3,
+            'SUBSCRIBES_TO': 1.2, 'REFERS': 1.2, 'REVIEWS': 1.2,
+
+            # General relationships
+            'RELATED_TO': 1.1, 'MENTIONED_IN': 1.0, 'HAS_CHUNK': 1.0
+        }
+
+        rerank_factor = parameters.get('graph_rerank_factor', 1.2)  # Default 20% boost
+        reranked_count = 0
+
+        for result in results:
+            if result.get('source') == 'vector':
+                content = result.get('content', '').lower()
+
+                # Check for relationship context relevance
+                relationship_matches = []
+                for rel_type in graph_relationships:
+                    # Look for relationship-related keywords in content
+                    rel_keywords = self._get_relationship_keywords(rel_type)
+                    if any(keyword in content for keyword in rel_keywords):
+                        relationship_matches.append((rel_type, relationship_weights.get(rel_type.upper(), 1.1)))
+
+                if relationship_matches:
+                    # Apply the highest relationship boost
+                    best_match = max(relationship_matches, key=lambda x: x[1])
+                    rel_type, base_weight = best_match
+
+                    # Apply reranking boost
+                    original_score = result.get('combined_score', result.get('similarity_score', 0.5))
+                    reranked_score = original_score * rerank_factor * base_weight
+                    result['combined_score'] = min(reranked_score, 1.0)  # Cap at 1.0
+                    result['graph_rerank'] = rerank_factor
+                    result['relationship_context'] = rel_type
+                    result['relationship_weight'] = base_weight
+                    reranked_count += 1
+
+                    logger.debug(f"Reranked vector result: {original_score:.3f} -> {reranked_score:.3f} "
+                               f"(relationship: {rel_type}, weight: {base_weight})")
+
+        logger.info(f"Applied graph-aware reranking to {reranked_count} vector results")
+        return results
+
+    def _get_relationship_keywords(self, relationship_type: str) -> List[str]:
+        """Get keywords associated with a relationship type for content matching"""
+        # Domain-specific keyword mapping
+        keyword_map = {
+            'REGULATES': ['regulates', 'regulatory', 'regulation', 'governs', 'controls', 'oversight'],
+            'REQUIRES': ['requires', 'requirement', 'mandatory', 'needed', 'necessary', 'must'],
+            'COMPLIES_WITH': ['complies', 'compliance', 'follows', 'adheres', 'conforms'],
+            'APPROVES': ['approves', 'approval', 'authorized', 'grants', 'permits'],
+            'MONITORS': ['monitors', 'monitoring', 'watches', 'tracks', 'observes'],
+            'REPORTS_TO': ['reports', 'reporting', 'submits', 'notifies', 'informs'],
+            'PREVENTS': ['prevents', 'prevention', 'avoids', 'blocks', 'stops'],
+            'CAUSES': ['causes', 'cause', 'leads', 'results', 'triggers'],
+            'OWNS': ['owns', 'ownership', 'possesses', 'holds', 'controls'],
+            'INVESTS_IN': ['invests', 'investment', 'funds', 'finances', 'backs'],
+            'CONTROLS': ['controls', 'control', 'manages', 'directs', 'governs'],
+            'FUNDS': ['funds', 'funding', 'finances', 'supports', 'provides'],
+            'SERVES': ['serves', 'service', 'provides', 'offers', 'delivers'],
+            'CONTACTS': ['contacts', 'contact', 'reaches', 'connects', 'communicates'],
+            'PURCHASES_FROM': ['purchases', 'buys', 'acquires', 'procures', 'obtains'],
+            'SUPPORTS': ['supports', 'support', 'helps', 'assists', 'aids'],
+            'RELATED_TO': ['related', 'connected', 'linked', 'associated', 'tied'],
+            'MENTIONED_IN': ['mentioned', 'referenced', 'cited', 'stated', 'noted']
+        }
+
+        rel_upper = relationship_type.upper()
+        return keyword_map.get(rel_upper, [relationship_type.lower()])
+
+    def enhance_query_with_graph_context(self, original_query: str,
+                                        graph_results: List[Dict[str, Any]]) -> str:
+        """Enhance query with context from graph search results"""
+        if not graph_results:
+            return original_query
+
+        # Extract entities and relationships from graph results
+        context_entities = self._extract_entities_from_graph_results(graph_results)
+        context_relationships = self._extract_relationships_from_graph_results(graph_results)
+
+        # Build enhanced query
+        enhanced_parts = [original_query]
+
+        # Add entity context
+        if context_entities:
+            entity_list = list(context_entities)[:5]  # Limit to top 5
+            entity_context = f"相關實體: {'、'.join(entity_list)}"
+            enhanced_parts.append(entity_context)
+
+        # Add relationship context
+        if context_relationships:
+            rel_list = list(context_relationships)[:3]  # Limit to top 3
+            rel_context = f"相關關係: {'、'.join(rel_list)}"
+            enhanced_parts.append(rel_context)
+
+        enhanced_query = " | ".join(enhanced_parts)
+
+        logger.info(f"Enhanced query: '{original_query}' -> '{enhanced_query}'")
+        return enhanced_query
+
+    def _extract_relationships_from_graph_results(self, graph_results: List[Dict[str, Any]]) -> set:
+        """Extract relationship types from graph search results"""
+        relationships = set()
+
+        for result in graph_results:
+            # Extract relationship types
+            if 'relationship_chain' in result and result['relationship_chain']:
+                for rel_type in result['relationship_chain']:
+                    relationships.add(rel_type)
+
+            if 'relationship_types' in result and result['relationship_types']:
+                for rel_type in result['relationship_types']:
+                    relationships.add(rel_type)
+
+        return relationships
 
     def _apply_diversity_filter(self, results: List[Dict[str, Any]],
                                parameters: Dict[str, Any]) -> List[Dict[str, Any]]:

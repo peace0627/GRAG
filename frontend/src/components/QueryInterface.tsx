@@ -9,6 +9,7 @@ import { Loader2, Send, Brain, Eye, Search, Clock } from 'lucide-react';
 import { QueryResponse, QueryStatus } from '@/types/api';
 import { apiService } from '@/services/api';
 import { ReasoningTrace } from './ReasoningTrace';
+import { Markdown } from '@/components/ui/markdown';
 
 export function QueryInterface() {
   const [query, setQuery] = useState('');
@@ -155,11 +156,7 @@ export function QueryInterface() {
               {/* Answer */}
               <div>
                 <h4 className="font-semibold text-lg mb-2">回答</h4>
-                <div className="prose prose-slate dark:prose-invert max-w-none">
-                  {result.final_answer.split('\n').map((line, index) => (
-                    <p key={index} className="mb-2">{line}</p>
-                  ))}
-                </div>
+                <Markdown content={result.final_answer} />
               </div>
 
               {/* Evidence */}

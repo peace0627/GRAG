@@ -14,6 +14,194 @@ import tempfile
 import shutil
 import json
 from datetime import datetime
+import asyncio
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+import time
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Any
+import threading
+
+# 非同步任務管理器
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+@dataclass
+class ProcessingTask:
+    """文件處理任務"""
+    task_id: str
+    filename: str
+    file_path: Path
+    status: TaskStatus = TaskStatus.PENDING
+    progress: float = 0.0
+    message: str = ""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    estimated_time: Optional[int] = None  # 估計剩餘時間（秒）
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "filename": self.filename,
+            "status": self.status.value,
+            "progress": self.progress,
+            "message": self.message,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "result": self.result,
+            "error": self.error,
+            "estimated_time": self.estimated_time,
+            "elapsed_time": (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        }
+
+class TaskManager:
+    """非同步任務管理器"""
+
+    def __init__(self):
+        self.tasks: Dict[str, ProcessingTask] = {}
+        self.max_concurrent_tasks = 2
+        self.active_tasks = 0
+        self.task_timeout = 600  # 10分鐘超時
+        self.cleanup_interval = 3600  # 1小時清理一次
+        self._lock = threading.Lock()
+
+        # 啟動清理線程
+        self._cleanup_thread = threading.Thread(target=self._cleanup_worker, daemon=True)
+        self._cleanup_thread.start()
+
+    def create_task(self, filename: str, file_path: Path) -> str:
+        """創建新任務"""
+        task_id = str(uuid.uuid4())
+        task = ProcessingTask(
+            task_id=task_id,
+            filename=filename,
+            file_path=file_path,
+            status=TaskStatus.PENDING,
+            message="任務已創建，等待處理"
+        )
+
+        with self._lock:
+            self.tasks[task_id] = task
+
+        return task_id
+
+    def get_task(self, task_id: str) -> Optional[ProcessingTask]:
+        """獲取任務狀態"""
+        with self._lock:
+            return self.tasks.get(task_id)
+
+    def update_task_progress(self, task_id: str, progress: float, message: str):
+        """更新任務進度"""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task:
+                task.progress = progress
+                task.message = message
+
+    def start_task(self, task_id: str):
+        """開始任務處理"""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task and task.status == TaskStatus.PENDING:
+                task.status = TaskStatus.PROCESSING
+                task.start_time = datetime.now()
+                task.message = "開始處理文件..."
+                self.active_tasks += 1
+
+    def complete_task(self, task_id: str, result: Dict[str, Any]):
+        """完成任務"""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task:
+                task.status = TaskStatus.COMPLETED
+                task.end_time = datetime.now()
+                task.result = result
+                task.progress = 100.0
+                task.message = "處理完成"
+                self.active_tasks -= 1
+
+    def fail_task(self, task_id: str, error: str):
+        """任務失敗"""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task:
+                task.status = TaskStatus.FAILED
+                task.end_time = datetime.now()
+                task.error = error
+                task.message = f"處理失敗: {error[:100]}"
+                self.active_tasks -= 1
+
+                # 清理臨時文件
+                try:
+                    if task.file_path.exists():
+                        task.file_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup file for failed task {task_id}: {e}")
+
+    def cancel_task(self, task_id: str):
+        """取消任務"""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task and task.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]:
+                task.status = TaskStatus.CANCELLED
+                task.end_time = datetime.now()
+                task.message = "任務已取消"
+                if task.status == TaskStatus.PROCESSING:
+                    self.active_tasks -= 1
+
+                # 清理臨時文件
+                try:
+                    if task.file_path.exists():
+                        task.file_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup file for cancelled task {task_id}: {e}")
+
+    def can_start_task(self) -> bool:
+        """檢查是否可以開始新任務"""
+        return self.active_tasks < self.max_concurrent_tasks
+
+    def list_tasks(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """列出所有任務"""
+        with self._lock:
+            tasks = list(self.tasks.values())
+            # 按開始時間降序排序
+            tasks.sort(key=lambda x: x.start_time or datetime.min, reverse=True)
+            return [task.to_dict() for task in tasks[:limit]]
+
+    def _cleanup_worker(self):
+        """清理過期任務的worker線程"""
+        while True:
+            try:
+                current_time = datetime.now()
+                with self._lock:
+                    to_remove = []
+                    for task_id, task in self.tasks.items():
+                        # 清理完成/失敗的舊任務（保留24小時）
+                        if task.end_time and (current_time - task.end_time).total_seconds() > 86400:
+                            to_remove.append(task_id)
+                        # 清理超時的處理中任務
+                        elif (task.status == TaskStatus.PROCESSING and
+                              task.start_time and
+                              (current_time - task.start_time).total_seconds() > self.task_timeout):
+                            self.fail_task(task_id, "處理超時")
+
+                    for task_id in to_remove:
+                        del self.tasks[task_id]
+
+                time.sleep(self.cleanup_interval)
+            except Exception as e:
+                logger.error(f"Task cleanup error: {e}")
+                time.sleep(60)  # 錯誤時等待1分鐘再試
+
+# 全域任務管理器實例
+task_manager = TaskManager()
 
 # 導入核心服務
 from grag.core.health_service import HealthService
@@ -268,6 +456,180 @@ async def upload_batch_files(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Batch upload failed: {str(e)}")
+
+@app.post("/upload/async")
+async def upload_file_async(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    force_vlm: Optional[bool] = None
+):
+    """非同步上傳文件進行處理"""
+    try:
+        # 驗證文件類型
+        allowed_extensions = ['.pdf', '.docx', '.txt', '.md']
+        file_ext = Path(file.filename).suffix.lower()
+
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+            )
+
+        # 檢查文件大小 (限制為50MB)
+        file_content = await file.read()
+        file_size_mb = len(file_content) / (1024 * 1024)
+
+        if file_size_mb > 50:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large: {file_size_mb:.1f}MB. Maximum allowed: 50MB"
+            )
+
+        # 檢查是否可以開始新任務
+        if not task_manager.can_start_task():
+            raise HTTPException(
+                status_code=429,
+                detail="Too many concurrent tasks. Please wait for current tasks to complete."
+            )
+
+        # 創建臨時文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+            temp_file.write(file_content)
+            temp_path = Path(temp_file.name)
+
+        # 創建非同步任務
+        task_id = task_manager.create_task(file.filename, temp_path)
+
+        # 添加後台任務
+        background_tasks.add_task(process_file_async, task_id, temp_path, force_vlm)
+
+        return {
+            "success": True,
+            "message": f"File '{file.filename}' upload accepted for async processing",
+            "task_id": task_id,
+            "file_size_mb": round(file_size_mb, 2),
+            "estimated_wait_time": "Processing will begin shortly"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Async upload failed: {str(e)}")
+
+@app.get("/upload/status/{task_id}")
+async def get_upload_status(task_id: str):
+    """獲取上傳任務的狀態"""
+    try:
+        task = task_manager.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        return task.to_dict()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get task status: {str(e)}")
+
+@app.delete("/upload/cancel/{task_id}")
+async def cancel_upload_task(task_id: str):
+    """取消上傳任務"""
+    try:
+        task_manager.cancel_task(task_id)
+        return {
+            "success": True,
+            "message": f"Task {task_id} cancelled successfully"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel task: {str(e)}")
+
+@app.get("/upload/tasks")
+async def list_upload_tasks(limit: int = 20):
+    """列出所有上傳任務"""
+    try:
+        tasks = task_manager.list_tasks(limit)
+        return {
+            "success": True,
+            "tasks": tasks,
+            "total": len(tasks)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list tasks: {str(e)}")
+
+async def process_file_async(task_id: str, file_path: Path, force_vlm: Optional[bool] = None):
+    """非同步處理文件的背景任務"""
+    try:
+        # 開始任務
+        task_manager.start_task(task_id)
+
+        # 更新進度：文件驗證完成
+        task_manager.update_task_progress(task_id, 5, "文件驗證完成，開始初始化處理服務")
+
+        # 初始化處理服務
+        ingestion_service = IngestionService()
+
+        # 更新進度：服務初始化完成
+        task_manager.update_task_progress(task_id, 10, "處理服務初始化完成，開始文檔處理")
+
+        # 估計處理時間 (基於文件大小)
+        file_size = file_path.stat().st_size
+        estimated_time = min(max(file_size / (1024 * 1024) * 30, 30), 300)  # 30秒到5分鐘
+
+        # 更新進度：開始處理
+        task_manager.update_task_progress(task_id, 15, f"開始處理文檔，預計需要約{estimated_time:.0f}秒")
+
+        # 進行文件處理
+        result = await ingestion_service.ingest_document_enhanced(
+            file_path=file_path,
+            force_vlm=force_vlm
+        )
+
+        # 更新進度：處理完成
+        task_manager.update_task_progress(task_id, 95, "文檔處理完成，正在清理資源")
+
+        # 清理臨時文件
+        try:
+            file_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp file {file_path}: {e}")
+
+        # 更新進度：清理完成
+        task_manager.update_task_progress(task_id, 99, "資源清理完成")
+
+        if result.get("success"):
+            # 完成任務
+            result_data = {
+                "document_id": result.get("file_id"),
+                "processing_time": result.get("processing_time"),
+                "processing_method": result.get("strategy_used", {}).get("processing_layer", "unknown"),
+                "vlm_provider": result.get("strategy_used", {}).get("vlm_provider", "unknown"),
+                "total_characters": result.get("statistics", {}).get("total_characters", 0),
+                "chunks_created": result.get("statistics", {}).get("chunks", {}).get("total", 0),
+                "entities_extracted": result.get("metadata", {}).get("entities_extracted", 0),
+                "relations_extracted": result.get("metadata", {}).get("relations_extracted", 0)
+            }
+            task_manager.complete_task(task_id, result_data)
+            logger.info(f"Async processing completed for task {task_id}")
+        else:
+            # 任務失敗
+            error_msg = result.get("error", "Processing failed")
+            task_manager.fail_task(task_id, error_msg)
+            logger.error(f"Async processing failed for task {task_id}: {error_msg}")
+
+    except Exception as e:
+        # 任務失敗
+        error_msg = f"Unexpected error during async processing: {str(e)}"
+        task_manager.fail_task(task_id, error_msg)
+        logger.error(f"Async processing failed for task {task_id}: {error_msg}")
+
+        # 清理臨時文件
+        try:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup temp file {file_path} after error: {cleanup_error}")
 
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: str):

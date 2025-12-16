@@ -15,7 +15,7 @@ class ApiService {
   constructor() {
     this.client = axios.create({
       baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000',
-      timeout: parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '30000'),
+      timeout: parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '120000'), // 增加到2分鐘
       headers: {
         'Content-Type': 'application/json',
       },
@@ -66,6 +66,61 @@ class ApiService {
         'Content-Type': 'multipart/form-data',
       },
     });
+    return response.data;
+  }
+
+  // Async File Upload
+  async uploadFileAsync(file: File): Promise<{
+    success: boolean;
+    task_id: string;
+    message: string;
+    file_size_mb: number;
+  }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await this.client.post('/upload/async', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  // Get Upload Task Status
+  async getUploadStatus(taskId: string): Promise<{
+    task_id: string;
+    filename: string;
+    status: string;
+    progress: number;
+    message: string;
+    start_time?: string;
+    end_time?: string;
+    result?: any;
+    error?: string;
+    estimated_time?: number;
+    elapsed_time: number;
+  }> {
+    const response = await this.client.get(`/upload/status/${taskId}`);
+    return response.data;
+  }
+
+  // Cancel Upload Task
+  async cancelUploadTask(taskId: string): Promise<{ success: boolean; message: string }> {
+    const response = await this.client.delete(`/upload/cancel/${taskId}`);
+    return response.data;
+  }
+
+  // List Upload Tasks
+  async listUploadTasks(limit?: number): Promise<{
+    success: boolean;
+    tasks: any[];
+    total: number;
+  }> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append('limit', limit.toString());
+
+    const response = await this.client.get(`/upload/tasks?${params.toString()}`);
     return response.data;
   }
 

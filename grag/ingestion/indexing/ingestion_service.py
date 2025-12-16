@@ -16,6 +16,8 @@ from ..vision.vlm_service import VLMService
 from ..langchain_loader import LangChainDocumentLoader, DocumentProcessingStrategy, StructuredTextFallback
 from grag.core.config import settings
 from grag.core.database_services import DatabaseManager
+from grag.core.relationship_classifier import classify_relationship, DomainType
+from grag.core.schemas.domain_relationships import DomainRelationshipRegistry, relationship_registry
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +223,7 @@ class IngestionService:
             self.knowledge_extractor = LLMKnowledgeExtractor(use_llm=True)
             logger.info("Using LLM-powered knowledge extraction")
         else:
-            self.knowledge_extractor = KnowledgeExtractor()  # Rule-based fallback
+            self.knowledge_extractor = LLMKnowledgeExtractor(use_llm=False)  # Rule-based fallback
             logger.info("Using rule-based knowledge extraction")
 
         # Initialize LangChain-based document processing
@@ -863,24 +865,36 @@ class IngestionService:
 
         try:
             # Try LLM extraction first
-            llm_entities = []
+            all_llm_entities = []
+            all_llm_relations = []
+
             for chunk in embedded_chunks:
                 try:
-                    chunk_entities = await self.knowledge_extractor._extract_entities_with_llm(
+                    # This now returns (entities, relations) tuple
+                    chunk_result = await self.knowledge_extractor._extract_entities_with_llm(
                         chunk.get("content", ""), str(chunk.get("chunk_id", ""))
                     )
-                    llm_entities.extend(chunk_entities)
+
+                    # Handle the tuple return
+                    if isinstance(chunk_result, tuple) and len(chunk_result) == 2:
+                        chunk_entities, chunk_relations = chunk_result
+                        all_llm_entities.extend(chunk_entities)
+                        all_llm_relations.extend(chunk_relations)
+                    else:
+                        logger.warning(f"Unexpected LLM result format for chunk {chunk.get('chunk_id')}: {type(chunk_result)}")
+
                 except Exception as e:
                     logger.warning(f"LLM extraction failed for chunk {chunk.get('chunk_id')}: {e}")
 
             # If LLM extracted entities, use them
-            if llm_entities:
-                logger.info(f"LLM extracted {len(llm_entities)} entities, using LLM results")
-                # Get relations and events using regex
+            if all_llm_entities:
+                logger.info(f"LLM extracted {len(all_llm_entities)} entities and {len(all_llm_relations)} relations, using LLM results")
+                # Get base knowledge structure using regex extractor
                 knowledge_data = await self.knowledge_extractor.extract_knowledge(embedded_chunks, visual_facts)
-                # Replace entities with LLM results
-                knowledge_data["entities"] = llm_entities
-                logger.info(f"Returning LLM-enhanced knowledge data with {len(knowledge_data.get('entities', []))} entities")
+                # Replace with LLM results
+                knowledge_data["entities"] = all_llm_entities
+                knowledge_data["relations"] = all_llm_relations
+                logger.info(f"Returning LLM-enhanced knowledge data with {len(knowledge_data.get('entities', []))} entities and {len(knowledge_data.get('relations', []))} relations")
                 return knowledge_data
             else:
                 logger.info("LLM extraction returned no entities, falling back to regex")
@@ -1059,21 +1073,107 @@ class IngestionService:
 
                     for chunk_id in chunk_ids:
                         try:
+                            # 使用domain-aware分類器選擇最適合的關係類型
+                            chunk_content = ""
+                            # 從chunks中找到對應的內容
+                            for chunk in data["chunks"]:
+                                if str(chunk.get("chunk_id", "")) == str(chunk_id):
+                                    chunk_content = chunk.get("content", "")
+                                    break
+
+                            # 選擇關係類型（優先使用domain-specific，fallback到MENTIONED_IN）
+                            relationship_type = await self._get_relationship_type_for_entity(
+                                entity_data, chunk_content, data["area_id"]
+                            )
+
                             relationship = Neo4jRelationship(
                                 from_node="Entity",
                                 to_node="Chunk",
-                                relationship_type="MENTIONED_IN",
+                                relationship_type=relationship_type,
                                 from_id=created_entity_id,
                                 to_id=chunk_id
                             )
                             success = await self.db_manager.create_relationship(relationship)
                             if success:
                                 entity_relations_created += 1
+                                logger.info(f"Created {relationship_type} relationship between Entity {created_entity_id} and Chunk {chunk_id}")
                         except Exception as rel_error:
                             logger.warning(f"Failed to create Entity-Chunk relationship: {rel_error}")
 
                 except Exception as entity_error:
                     logger.warning(f"Failed to create entity: {entity_error}")
+
+            # Create Entity-Entity relationships from LLM-extracted relations
+            entity_entity_relations_created = 0
+            logger.info(f"Processing {len(data.get('relations', []))} extracted relations for Entity-Entity relationships")
+
+            for relation_data in data.get("relations", []):
+                try:
+                    # Parse subject and object entities
+                    subject_name = relation_data.get("subject", "").strip()
+                    object_name = relation_data.get("object", "").strip()
+                    predicate = relation_data.get("predicate", "").strip()
+
+                    logger.debug(f"Processing relation: {subject_name} --{predicate}--> {object_name}")
+
+                    if not subject_name or not object_name or not predicate:
+                        logger.debug(f"Skipping incomplete relation: subject='{subject_name}', object='{object_name}', predicate='{predicate}'")
+                        continue
+
+                    # Find corresponding entity IDs by name (with improved matching)
+                    subject_id = self._find_entity_id_by_name(subject_name, data["entities"])
+                    object_id = self._find_entity_id_by_name(object_name, data["entities"])
+
+                    logger.debug(f"Entity ID lookup: '{subject_name}' -> {subject_id}, '{object_name}' -> {object_id}")
+
+                    if not subject_id:
+                        logger.warning(f"Could not find entity ID for subject: '{subject_name}'")
+                        continue
+                    if not object_id:
+                        logger.warning(f"Could not find entity ID for object: '{object_name}'")
+                        continue
+                    if subject_id == object_id:
+                        logger.debug(f"Skipping self-relationship: {subject_name} -> {object_name}")
+                        continue
+
+                    # Get entity types for classification
+                    subject_type = self._find_entity_type_by_name(subject_name, data["entities"])
+                    object_type = self._find_entity_type_by_name(object_name, data["entities"])
+
+                    logger.debug(f"Entity types: {subject_name}={subject_type}, {object_name}={object_type}")
+
+                    # Use domain-aware classifier for Entity-Entity relationships
+                    try:
+                        relationship_type = await self._get_relationship_type_for_entities(
+                            {"name": subject_name, "type": subject_type},
+                            {"name": object_name, "type": object_type},
+                            predicate,
+                            data["area_id"]
+                        )
+                        logger.debug(f"Classified relationship type: {relationship_type}")
+                    except Exception as classify_error:
+                        logger.warning(f"Relationship classification failed: {classify_error}, using RELATED_TO")
+                        relationship_type = "RELATED_TO"
+
+                    relationship = Neo4jRelationship(
+                        from_node="Entity",
+                        to_node="Entity",
+                        relationship_type=relationship_type,
+                        from_id=subject_id,
+                        to_id=object_id
+                    )
+
+                    success = await self.db_manager.create_relationship(relationship)
+                    if success:
+                        entity_entity_relations_created += 1
+                        logger.info(f"✅ Created {relationship_type} relationship: {subject_name} -> {object_name}")
+                    else:
+                        logger.error(f"❌ Failed to create relationship in database: {subject_name} -> {object_name}")
+
+                except Exception as rel_error:
+                    logger.error(f"❌ Failed to create Entity-Entity relationship for {relation_data}: {rel_error}")
+                    import traceback
+                    logger.error(f"Stack trace: {traceback.format_exc()}")
 
             # Create Event nodes and relationships
             events_created = 0
@@ -1183,6 +1283,7 @@ class IngestionService:
                 "events_created": events_created,
                 "visual_facts_created": visual_facts_created,
                 "entity_relations_created": entity_relations_created,
+                "entity_entity_relations_created": entity_entity_relations_created,
                 "event_relations_created": event_relations_created,
                 "visual_fact_relations_created": visual_fact_relations_created
             }
@@ -1586,6 +1687,275 @@ class IngestionService:
         )
 
         return assessment
+
+    def _classify_domain_from_content(self, content: str, area_id: str) -> DomainType:
+        """增強版領域檢測 - 使用更多關鍵字和上下文分析"""
+        content_lower = content.lower()
+        area_id_lower = area_id.lower()
+
+        logger.info(f"🔍 Enhanced domain classification - Area ID: '{area_id}', Content length: {len(content)}")
+        logger.info(f"📄 Content sample: {content[:300]}...")
+
+        # 1. 基於area_id的直接映射 (最高優先級)
+        if "financial" in area_id_lower or "財報" in area_id_lower or "finance" in area_id_lower:
+            logger.info("🎯 Detected FINANCIAL domain from area_id")
+            return DomainType.FINANCIAL
+        elif "medical" in area_id_lower or "醫療" in area_id_lower or "fda" in area_id_lower or "device" in area_id_lower:
+            logger.info("🏥 Detected MEDICAL_DEVICE domain from area_id")
+            return DomainType.MEDICAL_DEVICE
+        elif "prospect" in area_id_lower or "客戶" in area_id_lower or "customer" in area_id_lower or "sales" in area_id_lower:
+            logger.info("👥 Detected PROSPECT domain from area_id")
+            return DomainType.PROSPECT
+        elif "internal" in area_id_lower or "內部" in area_id_lower or "report" in area_id_lower:
+            logger.info("🏢 Detected INTERNAL_REPORT domain from area_id")
+            return DomainType.INTERNAL_REPORT
+
+        # 2. 增強版關鍵字檢測 (加入更多專業術語)
+        medical_keywords = [
+            "fda", "device", "medical", "clinical", "approval", "regulation", "compliance",
+            "drug", "pharmaceutical", "therapy", "treatment", "patient", "trial", "study",
+            "adverse", "efficacy", "safety", "protocol", "submission", "clearance", "510k",
+            "premarket", "postmarket", "recall", "warning", "indication", "contraindication"
+        ]
+
+        financial_keywords = [
+            "revenue", "profit", "earnings", "financial", "quarter", "investment", "market",
+            "quarterly", "annual", "fiscal", "income", "expense", "balance", "sheet", "cash",
+            "flow", "asset", "liability", "equity", "dividend", "stock", "share", "valuation",
+            "growth", "margin", "forecast", "projection", "trend", "analysis", "report"
+        ]
+
+        prospect_keywords = [
+            "customer", "client", "prospect", "lead", "opportunity", "sales", "account",
+            "contact", "relationship", "pipeline", "conversion", "acquisition", "retention",
+            "satisfaction", "feedback", "requirement", "need", "demand", "budget", "roi",
+            "contract", "negotiation", "proposal", "tender", "bid", "competition", "market"
+        ]
+
+        internal_keywords = [
+            "internal", "confidential", "proprietary", "research", "development", "rd",
+            "quality", "assurance", "control", "process", "procedure", "standard", "audit",
+            "inspection", "testing", "validation", "verification", "performance", "metric",
+            "kpi", "benchmark", "improvement", "efficiency", "optimization", "analysis"
+        ]
+
+        # 計算各領域得分 (加入權重)
+        medical_score = sum(2 if kw in content_lower else 0 for kw in medical_keywords[:10]) + \
+                       sum(1 if kw in content_lower else 0 for kw in medical_keywords[10:])
+        financial_score = sum(2 if kw in content_lower else 0 for kw in financial_keywords[:10]) + \
+                        sum(1 if kw in content_lower else 0 for kw in financial_keywords[10:])
+        prospect_score = sum(2 if kw in content_lower else 0 for kw in prospect_keywords[:10]) + \
+                        sum(1 if kw in content_lower else 0 for kw in prospect_keywords[10:])
+        internal_score = sum(2 if kw in content_lower else 0 for kw in internal_keywords[:10]) + \
+                        sum(1 if kw in content_lower else 0 for kw in internal_keywords[10:])
+
+        # 3. 上下文模式檢測
+        content_patterns = {
+            "medical": [
+                r'\b(fda|ema|cfda)\b.*\b(approval|clearance|submission)\b',
+                r'\b(clinical trial|phase [123]|double.?blind)\b',
+                r'\b(adverse event|side effect|contraindication)\b'
+            ],
+            "financial": [
+                r'\b(q[1-4]|\bquarter\b).*(\d{4}|\breport\b)',
+                r'\b(revenue|profit|earnings)\b.*(\$|€|¥|£)',
+                r'\b(market share|market cap|valuation)\b'
+            ],
+            "prospect": [
+                r'\b(customer|client)\b.*\b(requirement|need|demand)\b',
+                r'\b(competition|competitor)\b.*\b(advantage|strength)\b',
+                r'\b(pipeline|forecast|projection)\b.*\b(sales|revenue)\b'
+            ]
+        }
+
+        # 檢查上下文模式
+        import re
+        for domain, patterns in content_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, content_lower, re.IGNORECASE):
+                    if domain == "medical":
+                        medical_score += 5
+                    elif domain == "financial":
+                        financial_score += 5
+                    elif domain == "prospect":
+                        prospect_score += 5
+
+        logger.info(f"📊 Enhanced keyword scores - Medical: {medical_score}, Financial: {financial_score}, Prospect: {prospect_score}, Internal: {internal_score}")
+
+        # 4. 根據得分和閾值選擇領域
+        scores = {
+            "medical": medical_score,
+            "financial": financial_score,
+            "prospect": prospect_score,
+            "internal": internal_score
+        }
+
+        max_domain = max(scores, key=scores.get)
+        max_score = scores[max_domain]
+
+        # 動態閾值：內容越長，要求的匹配分數越高
+        base_threshold = 3 if len(content) < 1000 else 5 if len(content) < 5000 else 8
+        context_bonus_threshold = 2  # 上下文模式匹配的額外分數
+
+        if max_score >= base_threshold:
+            domain_mapping = {
+                "medical": DomainType.MEDICAL_DEVICE,
+                "financial": DomainType.FINANCIAL,
+                "prospect": DomainType.PROSPECT,
+                "internal": DomainType.INTERNAL_REPORT
+            }
+            selected_domain = domain_mapping[max_domain]
+            logger.info(f"🎯 Selected {selected_domain.value} domain (score: {max_score}, threshold: {base_threshold})")
+            return selected_domain
+
+        logger.info(f"📝 No domain detected with sufficient confidence (max score: {max_score}, threshold: {base_threshold}), using GENERAL")
+        return DomainType.GENERAL
+
+    async def _get_relationship_type_for_entity(self, entity_data: Dict[str, Any],
+                                              chunk_content: str, area_id: str) -> str:
+        """使用domain-aware分類器選擇最適合的實體-分塊關係類型"""
+        try:
+            # 確定領域類型
+            domain_type = self._classify_domain_from_content(chunk_content, area_id)
+
+            # 獲取該領域可用的關係類型
+            available_relationships = relationship_registry.get_available_relationships(
+                domain_type, "Entity", "Chunk"
+            )
+
+            # 如果沒有專用關係，使用MENTIONED_IN作為fallback
+            if not available_relationships or "MENTIONED_IN" not in available_relationships:
+                logger.info(f"No domain-specific relationships available for {domain_type}, using MENTIONED_IN")
+                return "MENTIONED_IN"
+
+            # 使用分類器選擇最適合的關係
+            result = await classify_relationship(
+                domain_type,
+                {
+                    "type": entity_data.get("type", "Entity"),
+                    "name": entity_data.get("name", "")
+                },
+                {
+                    "type": "Chunk",
+                    "content": chunk_content[:200]  # 限制內容長度
+                },
+                chunk_content
+            )
+
+            selected_relationship = result.relationship_type
+            logger.info(f"Selected relationship '{selected_relationship}' for entity '{entity_data.get('name', '')}' in domain '{domain_type}'")
+
+            return selected_relationship
+
+        except Exception as e:
+            logger.warning(f"Relationship classification failed: {e}, falling back to MENTIONED_IN")
+            return "MENTIONED_IN"
+
+    async def _get_relationship_type_for_entities(self, subject_entity: Dict[str, Any],
+                                                object_entity: Dict[str, Any],
+                                                predicate: str, area_id: str) -> str:
+        """使用domain-aware分類器選擇最適合的實體-實體關係類型"""
+        try:
+            # 確定領域類型 - 使用兩個實體的名稱和謂詞作為上下文
+            context_content = f"{subject_entity.get('name', '')} {predicate} {object_entity.get('name', '')}"
+            domain_type = self._classify_domain_from_content(context_content, area_id)
+
+            # 獲取該領域可用的Entity-Entity關係類型
+            available_relationships = relationship_registry.get_available_relationships(
+                domain_type, "Entity", "Entity"
+            )
+
+            # 如果沒有專用關係，使用RELATED_TO作為fallback
+            if not available_relationships:
+                logger.info(f"No domain-specific Entity-Entity relationships available for {domain_type}, using RELATED_TO")
+                return "RELATED_TO"
+
+            # 使用分類器選擇最適合的關係
+            result = await classify_relationship(
+                domain_type,
+                subject_entity,
+                object_entity,
+                predicate  # 將謂詞作為上下文傳遞
+            )
+
+            selected_relationship = result.relationship_type
+            logger.info(f"Selected Entity-Entity relationship '{selected_relationship}' between '{subject_entity.get('name', '')}' and '{object_entity.get('name', '')}' in domain '{domain_type}'")
+
+            return selected_relationship
+
+        except Exception as e:
+            logger.warning(f"Entity-Entity relationship classification failed: {e}, falling back to RELATED_TO")
+            return "RELATED_TO"
+
+    def _find_entity_id_by_name(self, name: str, entities: List[Dict[str, Any]]) -> Optional[str]:
+        """根據名稱找到實體ID - 增強版匹配邏輯"""
+        if not name:
+            return None
+
+        name_lower = name.lower().strip()
+        name_normalized = self._normalize_entity_name(name_lower)
+
+        logger.debug(f"Looking for entity: '{name}' -> normalized: '{name_normalized}'")
+
+        # 首先嘗試精確匹配
+        for entity in entities:
+            entity_name = entity.get("name", "").lower().strip()
+            if entity_name == name_lower:
+                logger.debug(f"Exact match found: '{entity_name}' -> {entity.get('entity_id')}")
+                return entity.get("entity_id")
+
+            # 也檢查aliases
+            aliases = entity.get("aliases", [])
+            if aliases:
+                for alias in aliases:
+                    if alias.lower().strip() == name_lower:
+                        logger.debug(f"Alias match found: '{alias}' -> {entity.get('entity_id')}")
+                        return entity.get("entity_id")
+
+        # 如果精確匹配失敗，嘗試模糊匹配
+        for entity in entities:
+            entity_name = entity.get("name", "").lower().strip()
+            entity_normalized = self._normalize_entity_name(entity_name)
+
+            # 檢查標準化後的匹配
+            if entity_normalized == name_normalized:
+                logger.debug(f"Normalized match found: '{entity_name}' -> '{entity_normalized}' -> {entity.get('entity_id')}")
+                return entity.get("entity_id")
+
+            # 檢查部分匹配 (對於較長的名稱)
+            if len(name_normalized) > 3 and len(entity_normalized) > 3:
+                if name_normalized in entity_normalized or entity_normalized in name_normalized:
+                    logger.debug(f"Partial match found: '{name_normalized}' in '{entity_normalized}' -> {entity.get('entity_id')}")
+                    return entity.get("entity_id")
+
+        logger.debug(f"No match found for entity name: '{name}'")
+        return None
+
+    def _normalize_entity_name(self, name: str) -> str:
+        """標準化實體名稱以改善匹配"""
+        if not name:
+            return ""
+
+        # 移除常見的後綴和前綴
+        name = re.sub(r'\b(the|and|or|of|in|on|at|to|for|by|with)\b', '', name, flags=re.IGNORECASE)
+
+        # 移除特殊字符但保留空格
+        name = re.sub(r'[^\w\s]', '', name)
+
+        # 標準化空格
+        name = ' '.join(name.split())
+
+        return name.strip()
+
+    def _find_entity_type_by_name(self, name: str, entities: List[Dict[str, Any]]) -> str:
+        """根據名稱找到實體類型"""
+        entity_id = self._find_entity_id_by_name(name, entities)
+        if entity_id:
+            for entity in entities:
+                if entity.get("entity_id") == entity_id:
+                    return entity.get("type", "Entity")
+
+        return "Entity"  # 默認類型
 
     def _assess_content_quality(self, vlm_output, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Assess the quality of extracted content to determine if processing was successful"""
