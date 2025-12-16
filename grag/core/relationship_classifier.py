@@ -6,8 +6,7 @@ determine the most appropriate relationship type between nodes based on domain c
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from uuid import UUID
+from typing import Dict, Any, List, Tuple
 
 from .schemas.domain_relationships import (
     DomainType,

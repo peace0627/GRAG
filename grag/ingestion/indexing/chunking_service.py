@@ -72,7 +72,7 @@ class ChunkingService:
                     },
                     "relations": []
                 }
-                logger.info(f"Text shorter than chunk_size, created single chunk")
+                logger.info("Text shorter than chunk_size, created single chunk")
                 return [chunk_data]
 
             # For longer texts, use LlamaIndex splitter

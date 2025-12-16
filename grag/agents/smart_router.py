@@ -6,10 +6,10 @@ dynamically selecting the optimal combination of tools for different query types
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from enum import Enum
 
-from .query_schemas import StructuredQuery, QueryType, PrimaryAction, QueryIntent, QueryConstraints
+from .query_schemas import StructuredQuery, QueryType
 from .schemas import ToolType
 
 logger = logging.getLogger(__name__)

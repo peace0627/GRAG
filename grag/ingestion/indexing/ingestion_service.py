@@ -17,7 +17,7 @@ from ..langchain_loader import LangChainDocumentLoader, DocumentProcessingStrate
 from grag.core.config import settings
 from grag.core.database_services import DatabaseManager
 from grag.core.relationship_classifier import classify_relationship, DomainType
-from grag.core.schemas.domain_relationships import DomainRelationshipRegistry, relationship_registry
+from grag.core.schemas.domain_relationships import relationship_registry
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +428,7 @@ class IngestionService:
 
         # 模擬VLM文字分析結果
         regions = [VLMRegion(
-            region_id=f"text_region_0",
+            region_id="text_region_0",
             modality="text",
             description="Processed text content",
             bbox=[0, 0, len(text), 20],
@@ -1486,12 +1486,12 @@ class IngestionService:
                     vlm_model = vlm_output.metadata.get("vlm_model", "Unknown Model")
 
                 if vlm_provider == "ollama":
-                    vlm_module = f"grag.vision.VLMService → Ollama (本地VLM)"
-                    processor = f"Ollama本地VLM模型處理"
+                    vlm_module = "grag.vision.VLMService → Ollama (本地VLM)"
+                    processor = "Ollama本地VLM模型處理"
                     actual_processor = f"{vlm_model} (Ollama本地)"
                 elif vlm_provider == "openai":
-                    vlm_module = f"grag.vision.VLMService → OpenAI (雲端VLM)"
-                    processor = f"OpenAI GPT-4V視覺模型處理"
+                    vlm_module = "grag.vision.VLMService → OpenAI (雲端VLM)"
+                    processor = "OpenAI GPT-4V視覺模型處理"
                     actual_processor = f"{vlm_model} (OpenAI GPT-4V)"
                 else:
                     # Check if it's Qwen2VL by examining the URL or other metadata

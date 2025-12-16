@@ -8,7 +8,7 @@ import time
 from .ocr_processor import OCRProcessor
 from .mineru_processor import MinerUProcessor
 from .vlm_client import VLMClient
-from .vlm_schemas import VLMOutput, VLMRegion
+from .vlm_schemas import VLMOutput
 
 from grag.core.config import settings
 

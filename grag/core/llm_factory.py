@@ -6,7 +6,7 @@ with support for multiple providers including OpenAI, Ollama, and OpenAI-compati
 """
 
 import logging
-from typing import Optional, Union
+from typing import Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel

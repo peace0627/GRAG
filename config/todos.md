@@ -121,10 +121,17 @@
   - [x] config/history.md - 記錄向量搜索修復歷程
   - [x] config/progress.md - 更新進度追蹤
 - [x] **前端顯示修復**: 修復API list_documents端點硬編碼問題，實現真實處理結果顯示
-- [ ] 檢查 requirements.txt 無未使用套件
-- [ ] 驗證所有配置都在 .env 管理
-- [ ] 確保程式結構使用 Pydantic 控制
-- [ ] 確認程式運行在 uv 環境下
+- [x] 檢查並移除未使用的依賴套件 (py2neo, docx2txt, pypdf, openpyxl, python-docx, pdf2image, nest-asyncio)
+- [x] 驗證所有程式碼使用 Pydantic 控制結構
+- [x] 確認所有配置參數都在 .env 處理
+- [x] 確保程式結構使用 Pydantic 控制
+- [x] 確認程式運行在 uv 環境下
+- [x] 使用 ruff 檢查並修復程式碼一致性和格式問題
+- [x] 運行 uv 環境下的測試確保程式正常運作
+- [x] 更新 README.md 和其他文檔以反映最新狀態
+- [x] 檢查資料庫架構是否符合 database_schema.md
+- [x] 更新 todos.md 和 history.md 記錄整理工作
+- [x] 驗證專案在 uv 環境下完整運行
 - [x] 更新 history.md (已創建)
 
 ## 資料庫維護任務 ✅ 已完成 (100%)

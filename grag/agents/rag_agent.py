@@ -16,7 +16,7 @@ from .planner import QueryPlanner
 from .retrieval_agent import RetrievalAgent
 from .reasoning_agent import ReasoningAgent
 from .tool_agent import ToolAgent, ReflectorAgent
-from .schemas import QueryState, QueryType, Evidence
+from .schemas import QueryState, QueryType, ToolType
 from ..core.database_services import DatabaseManager
 from ..core.config import get_config
 from ..core.llm_factory import create_answerer_llm, create_default_llm
@@ -202,7 +202,7 @@ Please provide a comprehensive answer based on the above evidence. Consider sour
 
     async def _convert_to_unified_evidence(self, evidence_list: List[Any]) -> List[Dict[str, Any]]:
         """Convert collected evidence to unified format with source awareness"""
-        from ..core.schemas.unified_schemas import SourceType, Modality
+        from ..core.schemas.unified_schemas import Modality
 
         unified_evidence = []
 
@@ -600,7 +600,7 @@ IMPORTANT: Evidence contains contradictions (Severity: {severity.upper()})
 
         # Knowledge base status
         if available_docs > 0:
-            response_parts.append(f"\n📚 知識庫狀態：")
+            response_parts.append("\n📚 知識庫狀態：")
             response_parts.append(f"- 總共 {available_docs} 個文檔")
             if content_themes:
                 response_parts.append(f"- 主要主題: {', '.join(content_themes)}")
@@ -609,22 +609,22 @@ IMPORTANT: Evidence contains contradictions (Severity: {severity.upper()})
         if total_evidence > 0:
             evidence = search_results.get("evidence", [])
             if evidence:
-                response_parts.append(f"\n🔍 找到的相關內容：")
+                response_parts.append("\n🔍 找到的相關內容：")
                 for i, ev in enumerate(evidence[:3]):  # Show top 3
                     content_preview = ev.content[:100] + "..." if len(ev.content) > 100 else ev.content
                     response_parts.append(f"{i+1}. {content_preview}")
 
         # Suggestions
         if suggestions:
-            response_parts.append(f"\n💡 建議：")
+            response_parts.append("\n💡 建議：")
             for suggestion in suggestions:
                 response_parts.append(f"- {suggestion}")
 
         # Call to action
         if available_docs == 0:
-            response_parts.append(f"\n📤 建議上傳相關技術文檔來擴展知識庫。")
+            response_parts.append("\n📤 建議上傳相關技術文檔來擴展知識庫。")
         else:
-            response_parts.append(f"\n🔄 請嘗試使用不同的關鍵字或更具體的查詢。")
+            response_parts.append("\n🔄 請嘗試使用不同的關鍵字或更具體的查詢。")
 
         return "\n".join(response_parts)
 

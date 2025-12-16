@@ -6,12 +6,9 @@ across vector databases and knowledge graphs with enhanced merging and caching.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from uuid import UUID
+from typing import Dict, Any, List, Optional
 import time
 import hashlib
-from functools import lru_cache
-import asyncio
 from collections import defaultdict
 
 from .schemas import (

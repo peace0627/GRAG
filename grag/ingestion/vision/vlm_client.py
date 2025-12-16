@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from uuid import uuid4
 
 import requests
@@ -200,7 +200,6 @@ class VLMClient:
     def _process_pdf_as_image(self, pdf_path: Path) -> Dict[str, Any]:
         """Convert PDF first page to image and process with REAL VLM API"""
         import tempfile
-        import logging
 
         try:
             logger.info(f"Converting PDF to image for VLM processing: {pdf_path.name}")

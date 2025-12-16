@@ -12,7 +12,7 @@ from uuid import UUID
 from neo4j import AsyncGraphDatabase
 from supabase import Client, create_client
 
-from .schemas.neo4j_schemas import DocumentNode, ChunkNode, EntityNode, EventNode, VisualFactNode, Neo4jRelationship
+from .schemas.neo4j_schemas import ChunkNode, EntityNode, EventNode, VisualFactNode, Neo4jRelationship
 from .schemas.pgvector_schemas import VectorRecord, VectorInsert
 
 logger = logging.getLogger(__name__)
@@ -395,7 +395,6 @@ class DatabaseManager:
         try:
             # Import here to avoid circular imports
             from neo4j import GraphDatabase
-            import logging
 
             driver = GraphDatabase.driver(
                 self.neo4j_uri,

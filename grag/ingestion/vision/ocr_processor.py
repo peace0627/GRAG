@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import time
 import io
 import csv
@@ -11,7 +11,7 @@ import pdfplumber
 from PIL import Image
 import pytesseract
 
-from .vlm_schemas import TableData, VLMOutput, VLMRegion, ChartData
+from .vlm_schemas import TableData, VLMOutput, VLMRegion
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,6 @@ class OCRProcessor:
         if not table:
             return ""
 
-        import csv
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerows(table)

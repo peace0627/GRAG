@@ -1,6 +1,5 @@
 """Configuration management using Pydantic Settings and environment variables"""
 
-import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings

@@ -2,7 +2,6 @@
 
 import logging
 from typing import List, Dict, Any, Optional
-import numpy as np
 
 from grag.core.config import settings
 

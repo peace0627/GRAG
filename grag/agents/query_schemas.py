@@ -6,7 +6,7 @@ queries into structured, programmable representations.
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from enum import Enum
 
 

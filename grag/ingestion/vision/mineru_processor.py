@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import time
 import tempfile
 
@@ -368,7 +368,6 @@ class MinerUProcessor:
             csv_rows.append(cells)
 
         # Convert to CSV string
-        import csv
         output = []
         for row in csv_rows:
             output.append(','.join(f'"{cell}"' for cell in row))

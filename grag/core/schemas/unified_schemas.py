@@ -6,7 +6,7 @@ evidence, and relationships across the entire GraphRAG system.
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional, Literal, Union
+from typing import Dict, Any, List, Optional, Literal
 from uuid import UUID, uuid4
 from datetime import datetime
 from enum import Enum

@@ -8,7 +8,6 @@ from typing import List, Dict, Any, Optional, Tuple
 from uuid import uuid4
 from datetime import datetime
 
-from grag.core.config import settings
 
 logger = logging.getLogger(__name__)
 

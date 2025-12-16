@@ -10,7 +10,7 @@ from typing import Dict, Any, List
 from datetime import datetime
 
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 
 from .schemas import (
     QueryState,

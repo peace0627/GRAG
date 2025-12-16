@@ -6,11 +6,10 @@ providing unified ranking, deduplication, and quality assessment.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from collections import defaultdict
-import math
 
-from ..core.schemas.unified_schemas import UnifiedEvidence, KnowledgeUnit, SourceType, Modality
+from ..core.schemas.unified_schemas import UnifiedEvidence, SourceType, Modality
 
 logger = logging.getLogger(__name__)
 

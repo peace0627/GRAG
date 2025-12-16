@@ -2,10 +2,9 @@
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Dict, Any
 import time
 import tempfile
-import json
 
 import fitz  # PyMuPDF
 
@@ -276,7 +275,6 @@ class PyMuPDFProcessor:
         if not table_data or len(table_data) < 2:
             return ""
 
-        import csv
         output = []
         for row in table_data:
             # Clean and escape row data
@@ -315,7 +313,7 @@ class PyMuPDFProcessor:
         for table in tables:
             fact = {
                 "entity": "table_detected",
-                "value": f"Table with structured data (CSV format)",
+                "value": "Table with structured data (CSV format)",
                 "region": table.table_id,
                 "type": "pymupdf_table",
                 "page": table.page

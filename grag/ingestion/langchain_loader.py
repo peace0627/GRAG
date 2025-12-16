@@ -2,8 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from uuid import uuid4
+from typing import List, Optional
 from datetime import datetime
 
 from langchain_community.document_loaders import (
@@ -14,8 +13,7 @@ from langchain_community.document_loaders import (
 )
 from langchain_core.documents import Document as LangchainDocument
 
-from grag.ingestion.vision.vlm_schemas import VLMOutput, VLMRegion, TableData, ChartData
-from grag.core.config import settings
+from grag.ingestion.vision.vlm_schemas import VLMOutput, VLMRegion, TableData
 
 logger = logging.getLogger(__name__)
 

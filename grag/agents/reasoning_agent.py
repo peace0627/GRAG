@@ -6,8 +6,7 @@ reasoning, path finding, and subgraph extraction.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from uuid import UUID
+from typing import Dict, Any, List, Optional
 import time
 
 from .schemas import ReasoningResult

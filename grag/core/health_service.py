@@ -4,7 +4,7 @@ Health Service
 提供系統組件的狀態檢查和報告生成
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from grag.core.config import settings
 
 

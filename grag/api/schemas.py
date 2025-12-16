@@ -6,7 +6,7 @@ document management, and system operations.
 """
 
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import datetime
 

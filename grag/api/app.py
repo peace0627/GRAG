@@ -6,22 +6,22 @@ GraphRAG系統的REST API服務
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import uvicorn
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 import tempfile
 import shutil
-import json
 from datetime import datetime
-import asyncio
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 import time
 from enum import Enum
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Any
+from dataclasses import dataclass
 import threading
+import logging
+
+# 配置日誌
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 非同步任務管理器
 class TaskStatus(str, Enum):
@@ -211,9 +211,7 @@ from grag.ingestion.indexing.ingestion_service import IngestionService
 # 導入Agent和API Schemas
 from grag.agents.rag_agent import AgenticRAGAgent
 from .schemas import (
-    QueryRequest, QueryResponse, SystemStatusResponse,
-    UploadResponse, BatchUploadResponse, DeleteResponse,
-    StatisticsResponse, SearchRequest, SearchResponse, ErrorResponse
+    QueryRequest, QueryResponse, SystemStatusResponse
 )
 
 # 創建FastAPI應用
@@ -401,7 +399,7 @@ async def upload_batch_files(
                     results.append({
                         "filename": file.filename,
                         "success": False,
-                        "error": f"Unsupported file type"
+                        "error": "Unsupported file type"
                     })
                     total_failed += 1
                     continue
@@ -1150,7 +1148,6 @@ async def get_knowledge_graph(limit: int = 100):
 
 def main():
     """啟動FastAPI服務"""
-    import uvicorn
     print("🚀 GraphRAG API服務啟動中...")
     print("📊 服務信息:")
     print("  - API地址: http://localhost:8000")
