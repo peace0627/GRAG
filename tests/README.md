@@ -5,21 +5,17 @@
 ```
 tests/
 ├── README.md                 # 測試文檔 (本文件)
+├── data/                     # 測試數據目錄
+│   ├── test_document.txt     # 測試文檔 (從根目錄移動)
 ├── integration_test.py       # 統一集成測試 (主要測試入口)
 ├── test_langchain_ingestion.py  # LangChain組件測試
 ├── test_embedding_providers.py  # 嵌入提供商測試
 ├── test_structured_query_parser.py  # 查詢解析器測試
-└── test_unified_knowledge_system.py  # 知識系統測試
-
-根目錄臨時測試文件 (可清理):
-├── test_api_upload.py        # API上傳測試 (已整合到integration_test.py)
-├── test_pdf_upload.py        # PDF上傳組件測試 (已整合)
-├── test_full_ingestion.py    # 完整處理管道測試 (已整合)
-├── test_supabase.py          # Supabase測試
-├── test_vector_*.py          # 向量搜索測試
-├── test_fix_simple.py        # 簡單修復測試
-├── test_document.txt         # 測試文檔
-└── test_frontend_upload.html # 前端測試HTML
+├── test_supabase.py          # Supabase測試 (修復async)
+├── test_unified_knowledge_system.py  # 知識系統測試
+├── test_vector_direct.py     # 向量搜索直接測試 (修復async)
+├── test_vector_search.py     # 向量搜索測試 (修復async)
+└── test_pymupdf_processor.py # PyMuPDF處理器測試 (從根目錄移動)
 ```
 
 ## 主要測試分類

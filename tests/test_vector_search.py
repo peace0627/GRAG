@@ -6,8 +6,10 @@
 import asyncio
 import os
 import sys
+import pytest
 from supabase import create_client
 
+@pytest.mark.asyncio
 async def test_vector_search():
     try:
         # 從.env文件讀取Supabase設置
