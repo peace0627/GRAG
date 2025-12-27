@@ -1,0 +1,42 @@
+# Core Web Framework
+fastapi>=0.127.1
+uvicorn[standard]>=0.24.0
+
+# AI/ML Frameworks
+llama-index>=0.14.10
+langgraph>=1.0.5
+langchain>=1.2.0
+
+# Data Validation
+pydantic>=2.5.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Ollama Client
+ollama>=0.2.1
+
+# Testing Frameworks
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+behave>=1.2.6
+
+# Code Quality
+black>=23.0.0
+flake8>=6.0.0
+isort>=5.12.0
+
+# PDF Processing (MinerU dependencies)
+pdfminer.six>=20221105
+pdfplumber>=0.10.0
+
+# Image Processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# Database (Neo4j)
+neo4j>=5.0.0
+
+# Utilities
+requests>=2.31.0
+aiofiles>=23.0.0
